@@ -53,17 +53,20 @@ class GCPQuestionsAIService:
             print(f"[Warning] Imagen 3 擦除失败，降级使用原图进行解析: {e}")
             return image_bytes
 
-    def ocr_and_analyze(self, image_bytes: bytes) -> Dict[str, Any]:
+    def ocr_and_analyze(self, image_bytes: bytes, existing_tags: list = []) -> Dict[str, Any]:
         """
         调用 Gemini 1.5/3.1，利用多模态能力提取题目文本、公式(LaTeX) 及生成解析。
         """
         prompt = """
         作为一个资深的老师，请你仔细阅读这张错题图片。
+        **特别指令**：如果照片中包含多个题目，请辨别并**仅仅分析视觉上最主要（居中、最清晰或体量最大）的那个题目**，忽略边缘干扰，只需提取并解决核心的一道题。
+
         执行以下任务：
         1. 提取题目的正文、选项（如果有）。
         2. 如果题目包含数学/物理等公式，请务必将其转换为标准的 LaTeX 格式（例如: $E=mc^2$）。
         3. 给出分步解析、考点定位和防错指南。
-        4. 最后提供 1 道相同考点但数值不同的【举一反三】变式题。
+        4. 提供 1 道相同考点但数值不同的【举一反三】变式题（请务必附带答案与解析步骤）。
+        5. 对比现有标签候选列表：[EXISTING_TAGS]。请根据题目解析，从列表中选出 1-2 个最贴合本题的标签；如果列表中没有合适的，可自动建议。
 
         请严格以下列 JSON 结构返回结果，且不要包含任何 Markdown 标识符(如 ```json)：
         {
@@ -72,9 +75,12 @@ class GCPQuestionsAIService:
             "knowledge_point": "考点名称",
             "analysis_steps": ["步骤1简介...", "步骤2简介..."],
             "trap_warning": "易错点提醒",
+            "suggested_tags": ["标签1", "标签2"],
             "similar_question": {
-                "question_text": "变式题干",
-                "options": ["选项A", "选项B"...] 或 null
+                "question_text": "变式题干 (包含 LaTeX)",
+                "options": ["选项A", "选项B"...] 或 null,
+                "answer": "参考答案 (例如 A 选项，或者具体的公式数值)",
+                "analysis": "针对变式题的详细分步解析或思路"
             }
         }
         """
@@ -86,9 +92,12 @@ class GCPQuestionsAIService:
             vertexai.init(project=PROJECT_ID, location="global")
             gemini_model = GenerativeModel("gemini-3.1-pro-preview")
 
+            # 注入现有标签列表
+            prompt_content = prompt.replace("[EXISTING_TAGS]", str(existing_tags))
+
             # 使用 structured output 引导，或者在 prompt 强调。
             response = gemini_model.generate_content(
-                [image_part, prompt],
+                [image_part, prompt_content],
                 generation_config={
                     "temperature": 0.2, # 降低温度，防止幻觉
                     "response_mime_type": "application/json" # 强制返回 JSON 格式

@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'login_screen.dart';
 import 'recycle_bin_screen.dart';
 import 'package:flutter_math_fork/flutter_math.dart'; // 导入公式渲染包
+import 'package:url_launcher/url_launcher.dart';
 
 // ==========================================
 // 自定义混合文本渲染控件 (支持行内 $...$ 公式)
@@ -72,6 +73,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<String> _allTags = ["全部"];
   String _selectedTag = "全部";
 
+  // --- 新增：试卷导出与多选状态 ---
+  bool _isSelectionMode = false;
+  final Set<String> _selectedQuestionIds = {};
+  DateTimeRange? _selectedDateRange = null;
+
   @override
   void initState() {
     super.initState();
@@ -93,8 +99,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
       
       // 拉法支持过滤项
       final fetchTag = _selectedTag == '全部' ? null : _selectedTag;
-      final data = await apiService.fetchQuestions(tag: fetchTag);
+      List<QuestionModel> data = await apiService.fetchQuestions(tag: fetchTag);
       
+      // 时间跨度本地过滤
+      if (_selectedDateRange != null) {
+        data = data.where((q) {
+          try {
+            final ct = DateTime.parse(q.createdAt);
+            final start = _selectedDateRange!.start;
+            // 截至时间设置为当天 23:59:59 确保全天覆盖
+            final end = _selectedDateRange!.end.add(const Duration(days: 1)); 
+            return ct.isAfter(start) && ct.isBefore(end);
+          } catch (_) {
+            return true;
+          }
+        }).toList();
+      }
+
       setState(() {
          _allTags = ["全部", ...tags];
          _questions = data;
@@ -104,6 +125,47 @@ class _DashboardScreenState extends State<DashboardScreen> {
       print('Load dashboard error: $e');
       setState(() => _isLoading = false);
     }
+  }
+
+  void _exportPaper() async {
+    if (_selectedQuestionIds.isEmpty) return;
+    final ids = _selectedQuestionIds.join(',');
+    
+    bool? includeAnswers = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('试卷生成选项'),
+        content: const Text('是否在新标签页生成的试卷中，一并渲染 “参考答案与解析”？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('仅出题目')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('附带答案详解')),
+        ],
+      ),
+    );
+
+    if (includeAnswers == null) return;
+
+    // 1. 获取一次性免密安全票据
+    final ticketId = await apiService.createPaperTicket(ids, includeAnswers);
+    if (ticketId == null) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('生成打印凭证失败，请重试')));
+      return;
+    }
+
+    // 2. 使用票据打开新页面
+    final url = '${ApiService.baseUrl}/api/v1/questions/paper/export?ticket_id=$ticketId';
+    final uri = Uri.parse(url);
+    
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('无法打开试卷导出页面')));
+    }
+
+    setState(() {
+      _isSelectionMode = false;
+      _selectedQuestionIds.clear();
+    });
   }
 
   @override
@@ -116,32 +178,68 @@ class _DashboardScreenState extends State<DashboardScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
+            tooltip: '刷新列表',
             onPressed: _loadData,
           ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: '回收站',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (context) => const RecycleBinScreen())
-              ).then((_) => _loadData()); // 返回后自动重载列表
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              const storage = FlutterSecureStorage();
-              await storage.delete(key: 'jwt_token');
-              if (mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (context) => const LoginScreen()),
-                  (route) => false,
-                );
-              }
-            },
-          ),
+          if (!_isSelectionMode)
+            IconButton(
+              icon: const Icon(Icons.print_outlined),
+              tooltip: '生成试卷并打印',
+              onPressed: () => setState(() => _isSelectionMode = true),
+            ),
+          if (_isSelectionMode)
+            TextButton(
+              onPressed: () => setState(() {
+                _isSelectionMode = false;
+                _selectedQuestionIds.clear();
+              }),
+              child: const Text('取消选择', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          if (!_isSelectionMode) ...[
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: '回收站',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (context) => const RecycleBinScreen())
+                ).then((_) => _loadData());
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.logout),
+              tooltip: '登出',
+              onPressed: () async {
+                const storage = FlutterSecureStorage();
+                await storage.delete(key: 'jwt_token');
+                if (mounted) {
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (context) => const LoginScreen()),
+                    (route) => false,
+                  );
+                }
+              },
+            ),
+          ],
         ],
       ),
+      bottomNavigationBar: _isSelectionMode && _selectedQuestionIds.isNotEmpty
+          ? BottomAppBar(
+              height: 60,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                   Text('已选择 ${_selectedQuestionIds.length} 道错题', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                   ElevatedButton.icon(
+                     style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo, foregroundColor: Colors.white, elevation: 0),
+                     icon: const Icon(Icons.picture_as_pdf),
+                     label: const Text('预览 A/B 试卷视图'),
+                     onPressed: _exportPaper,
+                   ),
+                ],
+              ),
+            )
+          : null,
       body: _isLoading
           ? const Center(
               child: SpinKitFadingCircle(color: Colors.indigo, size: 50),
@@ -190,74 +288,113 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildCard(QuestionModel item) {
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: InkWell(
-        onTap: () => _showDetailModal(item),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-                child: CachedNetworkImage(
-                  imageUrl: item.imageBlank.startsWith('/') 
-                      ? '${ApiService.baseUrl}${item.imageBlank}' 
-                      : (item.imageBlank.isNotEmpty ? item.imageBlank : item.imageOriginal),
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  placeholder: (context, url) => const Center(child: SpinKitWave(color: Colors.indigo, size: 20)),
-                  errorWidget: (context, url, error) => Container(color: Colors.grey[200], child: const Icon(Icons.image_not_supported)),
+    bool isSelected = _selectedQuestionIds.contains(item.id);
+
+    return Stack(
+      children: [
+        Card(
+          elevation: isSelected ? 8 : 4,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: isSelected ? const BorderSide(color: Colors.indigo, width: 2) : BorderSide.none,
+          ),
+          child: InkWell(
+            onTap: _isSelectionMode
+                ? () {
+                    setState(() {
+                      if (isSelected) {
+                        _selectedQuestionIds.remove(item.id);
+                      } else {
+                        _selectedQuestionIds.add(item.id);
+                      }
+                    });
+                  }
+                : () => _showDetailModal(item),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                    child: CachedNetworkImage(
+                      imageUrl: item.imageBlank.startsWith('/') 
+                          ? '${ApiService.baseUrl}${item.imageBlank}' 
+                          : (item.imageBlank.isNotEmpty ? item.imageBlank : item.imageOriginal),
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => const Center(child: SpinKitWave(color: Colors.indigo, size: 20)),
+                      errorWidget: (context, url, error) => Container(color: Colors.grey[200], child: const Icon(Icons.image_not_supported)),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.knowledgePoint,
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo),
-                  ),
-                  const SizedBox(height: 4),
-                  if (item.tags.isNotEmpty)
-                    Wrap(
-                      spacing: 4,
-                      runSpacing: 4,
-                      children: item.tags.map((tag) => Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _getTagColor(tag).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: _getTagColor(tag).withOpacity(0.5), width: 0.5),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.knowledgePoint,
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.indigo),
+                      ),
+                      const SizedBox(height: 4),
+                      if (item.tags.isNotEmpty)
+                        Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: item.tags.map((tag) => Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _getTagColor(tag).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: _getTagColor(tag).withOpacity(0.5), width: 0.5),
+                            ),
+                            child: Text(
+                              tag,
+                              style: TextStyle(fontSize: 10, color: _getTagColor(tag), fontWeight: FontWeight.bold),
+                            ),
+                          )).toList(),
                         ),
+                      const SizedBox(height: 4),
+                      MathText(
+                        item.questionText,
+                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerRight,
                         child: Text(
-                          tag,
-                          style: TextStyle(fontSize: 10, color: _getTagColor(tag), fontWeight: FontWeight.bold),
+                          _formatTimestamp(item.createdAt).split(' ').first,
+                          style: const TextStyle(fontSize: 10, color: Colors.grey),
                         ),
-                      )).toList(),
-                    ),
-                  const SizedBox(height: 4),
-                  MathText(
-                    item.questionText,
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 6),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      _formatTimestamp(item.createdAt).split(' ').first, // 仅显示日期
-                      style: const TextStyle(fontSize: 10, color: Colors.grey),
-                    ),
-                  ),
-                ],
-              ),
-            )
-          ],
+                )
+              ],
+            ),
+          ),
         ),
-      ),
+        if (_isSelectionMode)
+          Positioned(
+            top: 4,
+            right: 4,
+            child: Checkbox(
+              value: isSelected,
+              activeColor: Colors.indigo,
+              checkColor: Colors.white,
+              shape: const CircleBorder(),
+              onChanged: (val) {
+                setState(() {
+                  if (val == true) {
+                    _selectedQuestionIds.add(item.id);
+                  } else {
+                    _selectedQuestionIds.remove(item.id);
+                  }
+                });
+              },
+            ),
+          ),
+      ],
     );
   }
 
@@ -309,6 +446,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       const Text('📝 题目正文：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                       const SizedBox(height: 8),
                       MathText(item.questionText, style: const TextStyle(fontSize: 16)),
+                      const SizedBox(height: 12),
+                      if (item.imageOriginal.isNotEmpty) ...[
+                        const Text('🖼️ 题目原图：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.indigo)),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: CachedNetworkImage(
+                            imageUrl: '${ApiService.baseUrl}${item.imageOriginal}',
+                            width: double.infinity,
+                            fit: BoxFit.contain, // 详情使用 contain 完整查看
+                            placeholder: (context, url) => const SizedBox(height: 100, child: Center(child: CircularProgressIndicator())),
+                            errorWidget: (context, url, error) => const Icon(Icons.broken_image, size: 40),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       const Divider(height: 20),
                       
                       const Text('🏷️ 所属科目/标签：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.indigo)),
@@ -357,9 +510,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
                       const Text('🧠 举一反三变式题：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.purple)),
                       const SizedBox(height: 8),
-                      if (item.similarQuestion != null)
-                         MathText(item.similarQuestion!['question_text'] ?? '暂无')
-                      else
+                      if (item.similarQuestion != null) ...[
+                         MathText(item.similarQuestion!['question_text'] ?? '暂无'),
+                         if (item.similarQuestion!['answer'] != null && item.similarQuestion!['answer'].toString().isNotEmpty) ...[
+                           const SizedBox(height: 12),
+                           const Text('✅ 参考答案：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green)),
+                           const SizedBox(height: 4),
+                           MathText(item.similarQuestion!['answer'].toString()),
+                         ],
+                         if (item.similarQuestion!['analysis'] != null && item.similarQuestion!['analysis'].toString().isNotEmpty) ...[
+                           const SizedBox(height: 12),
+                           const Text('📝 解析过程：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blueGrey)),
+                           const SizedBox(height: 4),
+                           MathText(item.similarQuestion!['analysis'].toString()),
+                         ],
+                      ] else
                          const Text('生成中...'),
                       const Divider(height: 30),
 
@@ -408,39 +573,78 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildFilterBar() {
     return Container(
       height: 50,
-      padding: const EdgeInsets.only(top: 8, bottom: 4),
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: _allTags.length,
-        itemBuilder: (context, index) {
-          final tag = _allTags[index];
-          final isSelected = tag == _selectedTag;
-          
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: FilterChip(
-              label: Text(tag),
-              selected: isSelected,
-              selectedColor: _getTagColor(tag).withOpacity(0.1),
-              checkmarkColor: _getTagColor(tag),
-              backgroundColor: Colors.transparent,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: isSelected ? _getTagColor(tag) : Colors.grey[300]!),
-              ),
-              labelStyle: TextStyle(
-                color: isSelected ? _getTagColor(tag) : Colors.black87,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              ),
-              onSelected: (selected) {
+      padding: const EdgeInsets.only(top: 8, bottom: 4, right: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: _allTags.length,
+              itemBuilder: (context, index) {
+                final tag = _allTags[index];
+                final isSelected = tag == _selectedTag;
+                
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: FilterChip(
+                    label: Text(tag),
+                    selected: isSelected,
+                    selectedColor: _getTagColor(tag).withOpacity(0.1),
+                    checkmarkColor: _getTagColor(tag),
+                    backgroundColor: Colors.transparent,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      side: BorderSide(color: isSelected ? _getTagColor(tag) : Colors.grey[300]!),
+                    ),
+                    labelStyle: TextStyle(
+                      color: isSelected ? _getTagColor(tag) : Colors.black87,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                    onSelected: (selected) {
+                      setState(() {
+                        _selectedTag = tag;
+                        _loadData(); // 重新按标拉取
+                      });
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+          const VerticalDivider(width: 1, indent: 8, endIndent: 8),
+          IconButton(
+            icon: Icon(
+              _selectedDateRange != null ? Icons.today_rounded : Icons.calendar_month_outlined,
+              color: _selectedDateRange != null ? Colors.indigo : Colors.grey[600],
+            ),
+            tooltip: '按入库时间筛选',
+            onPressed: () async {
+              final range = await showDateRangePicker(
+                context: context,
+                firstDate: DateTime(2025),
+                lastDate: DateTime.now().add(const Duration(days: 1)),
+                initialDateRange: _selectedDateRange,
+              );
+              if (range != null) {
                 setState(() {
-                  _selectedTag = tag;
-                  _loadData(); // 重新按标拉取
+                  _selectedDateRange = range;
+                  _loadData(); // 触发本地时间过滤
+                });
+              }
+            },
+          ),
+          if (_selectedDateRange != null)
+            IconButton(
+              icon: const Icon(Icons.clear, color: Colors.grey),
+              tooltip: '清空时间',
+              onPressed: () {
+                setState(() {
+                  _selectedDateRange = null;
+                  _loadData();
                 });
               },
             ),
-          );
-        },
+        ],
       ),
     );
   }

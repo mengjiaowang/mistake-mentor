@@ -108,6 +108,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     children: [
                       TextField(
                         controller: _usernameController,
+                        textInputAction: TextInputAction.next,
                         decoration: InputDecoration(
                           labelText: '用户名',
                           prefixIcon: const Icon(Icons.person),
@@ -120,6 +121,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       TextField(
                         controller: _passwordController,
                         obscureText: _obscurePassword,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (value) => _handleLogin(),
                         decoration: InputDecoration(
                           labelText: '密码',
                           prefixIcon: const Icon(Icons.lock),

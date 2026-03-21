@@ -23,6 +23,15 @@ class _CaptureScreenState extends State<CaptureScreen> {
   int _cameraIndex = 0;
   bool _isMirrored = false; // 新增：是否开启镜像翻转
   int _rotationTurns = 0;   // 新增：旋转四分位角 (0, 1, 2, 3 -> 0, 90, 180, 270度)
+  
+  // --- 新增：裁剪相关状态 ---
+  bool _isCropping = false;
+  double _cropL = 0.1; // 裁剪框左侧比例
+  double _cropT = 0.2; // 裁剪框顶部比例
+  double _cropW = 0.6; // 裁剪框宽度比例
+  double _cropH = 0.4; // 裁剪框高度比例
+  double _boxW = 0;    // 当前绘制容器视口宽度
+  double _boxH = 0;    // 当前绘制容器视口高度
 
   // 新增：保存拍摄后的冷冻帧数据
   Uint8List? _capturedImageBytes;
@@ -94,11 +103,30 @@ class _CaptureScreenState extends State<CaptureScreen> {
     try {
       setState(() => _isUploading = true);
       
+      // 计算 BoxFit.cover 缩放及切角偏移
+      double imgW = _rotationTurns % 2 == 1 ? _controller.value.previewSize!.height : _controller.value.previewSize!.width;
+      double imgH = _rotationTurns % 2 == 1 ? _controller.value.previewSize!.width : _controller.value.previewSize!.height;
+
+      double scale = _boxW / imgW > _boxH / imgH ? _boxW / imgW : _boxH / imgH; // max
+      double renderW = imgW * scale;
+      double renderH = imgH * scale;
+      double offsetX = (renderW - _boxW) / 2;
+      double offsetY = (renderH - _boxH) / 2;
+
+      double imgLeft = (_cropL * _boxW + offsetX) / scale;
+      double imgTop = (_cropT * _boxH + offsetY) / scale;
+      double imgWidth = (_cropW * _boxW) / scale;
+      double imgHeight = (_cropH * _boxH) / scale;
+
       final success = await apiService.uploadQuestion(
         _capturedImageBytes!, 
         _capturedImageName ?? "original.jpg",
         mirror: _isMirrored,
         rotateDegrees: _rotationTurns * 90,
+        cropLeft: _isCropping ? (imgLeft / imgW).clamp(0.0, 1.0) : 0.0,
+        cropTop: _isCropping ? (imgTop / imgH).clamp(0.0, 1.0) : 0.0,
+        cropWidth: _isCropping ? (imgWidth / imgW).clamp(0.0, 1.0) : 1.0,
+        cropHeight: _isCropping ? (imgHeight / imgH).clamp(0.0, 1.0) : 1.0,
       );
       
       setState(() => _isUploading = false);
@@ -131,6 +159,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
         actions: [
+          if (_capturedImageBytes != null)
+             IconButton(
+               icon: Icon(Icons.crop, color: _isCropping ? Colors.orange : Colors.white),
+               tooltip: '页面裁剪框选',
+               onPressed: () => setState(() => _isCropping = !_isCropping),
+             ),
           IconButton(
             icon: Icon(
               _isMirrored ? Icons.flip : Icons.flip_outlined, 
@@ -163,51 +197,136 @@ class _CaptureScreenState extends State<CaptureScreen> {
         future: _initializeControllerFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.done) {
-            return Stack(
-              children: [
-                // 核心：始终保持 CameraPreview 在底层，避免 Web 卸载导致黑屏
-                Positioned.fill(
-                  child: RotatedBox(
-                    quarterTurns: _rotationTurns,
-                    child: Transform(
-                      alignment: Alignment.center,
-                      transform: Matrix4.rotationY(_isMirrored ? 3.1415926535897932 : 0),
-                      child: CameraPreview(_controller),
-                    ),
-                  ),
-                ),
-                // 若已拍照，静态图片覆盖在上面
-                if (_capturedImageBytes != null)
-                  Positioned.fill(
-                    child: RotatedBox(
-                      quarterTurns: _rotationTurns,
-                      child: Transform(
-                        alignment: Alignment.center,
-                        transform: Matrix4.rotationY(_isMirrored ? 3.1415926535897932 : 0),
-                        child: Image.memory(
-                          _capturedImageBytes!, 
-                          width: double.infinity, 
-                          height: double.infinity, 
-                          fit: BoxFit.cover
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                _boxW = constraints.maxWidth;
+                _boxH = constraints.maxHeight;
+
+                final cropRect = Rect.fromLTWH(
+                  _cropL * _boxW, 
+                  _cropT * _boxH, 
+                  _cropW * _boxW, 
+                  _cropH * _boxH
+                );
+
+                return Stack(
+                  children: [
+                    // 核心：始终保持 CameraPreview 在底层，避免 Web 卸载导致黑屏
+                    Positioned.fill(
+                      child: RotatedBox(
+                        quarterTurns: _rotationTurns,
+                        child: Transform(
+                          alignment: Alignment.center,
+                          transform: Matrix4.rotationY(_isMirrored ? 3.1415926535897932 : 0),
+                          child: CameraPreview(_controller),
                         ),
                       ),
                     ),
-                  ),
-                if (_isUploading)
-                  Container(
-                    color: Colors.black45,
-                    child: const Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          SpinKitCubeGrid(color: Colors.white, size: 40),
-                          SizedBox(height: 16),
-                          Text('正在由 AI 处理及解析...', style: TextStyle(color: Colors.white)),
-                        ],
+                    // 若已拍照，静态图片覆盖在上面
+                    if (_capturedImageBytes != null)
+                      Positioned.fill(
+                        child: RotatedBox(
+                          quarterTurns: _rotationTurns,
+                          child: Transform(
+                            alignment: Alignment.center,
+                            transform: Matrix4.rotationY(_isMirrored ? 3.1415926535897932 : 0),
+                            child: Image.memory(
+                              _capturedImageBytes!, 
+                              width: double.infinity, 
+                              height: double.infinity, 
+                              fit: BoxFit.cover
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-              ],
+                    
+                    // 裁剪蒙层与拖拽手柄
+                    if (_capturedImageBytes != null && _isCropping) ...[
+                      CustomPaint(
+                        size: Size.infinite,
+                        painter: CropOverlayPainter(cropRect),
+                      ),
+                      // 中央拖拽移动
+                      Positioned.fromRect(
+                        rect: cropRect,
+                        child: GestureDetector(
+                          onPanUpdate: (d) {
+                            setState(() {
+                              _cropL = (_cropL + d.delta.dx / _boxW).clamp(0.0, 1.0 - _cropW);
+                              _cropT = (_cropT + d.delta.dy / _boxH).clamp(0.0, 1.0 - _cropH);
+                            });
+                          },
+                          child: Container(color: Colors.transparent),
+                        ),
+                      ),
+                      // 四角控制点
+                      _buildHandle(
+                        left: cropRect.left - 15,
+                        top: cropRect.top - 15,
+                        onPan: (d) {
+                          setState(() {
+                            double newL = (_cropL + d.delta.dx / _boxW).clamp(0.0, _cropL + _cropW - 0.1);
+                            _cropW = (_cropW + (_cropL - newL)).clamp(0.1, 1.0 - newL);
+                            _cropL = newL;
+                            double newT = (_cropT + d.delta.dy / _boxH).clamp(0.0, _cropT + _cropH - 0.1);
+                            _cropH = (_cropH + (_cropT - newT)).clamp(0.1, 1.0 - newT);
+                            _cropT = newT;
+                          });
+                        }
+                      ),
+                      _buildHandle(
+                        left: cropRect.right - 15,
+                        top: cropRect.top - 15,
+                        onPan: (d) {
+                          setState(() {
+                            _cropW = (_cropW + d.delta.dx / _boxW).clamp(0.1, 1.0 - _cropL);
+                            double newT = (_cropT + d.delta.dy / _boxH).clamp(0.0, _cropT + _cropH - 0.1);
+                            _cropH = (_cropH + (_cropT - newT)).clamp(0.1, 1.0 - newT);
+                            _cropT = newT;
+                          });
+                        }
+                      ),
+                      _buildHandle(
+                        left: cropRect.left - 15,
+                        top: cropRect.bottom - 15,
+                        onPan: (d) {
+                          setState(() {
+                            double newL = (_cropL + d.delta.dx / _boxW).clamp(0.0, _cropL + _cropW - 0.1);
+                            _cropW = (_cropW + (_cropL - newL)).clamp(0.1, 1.0 - newL);
+                            _cropL = newL;
+                            _cropH = (_cropH + d.delta.dy / _boxH).clamp(0.1, 1.0 - _cropT);
+                          });
+                        }
+                      ),
+                      _buildHandle(
+                        left: cropRect.right - 15,
+                        top: cropRect.bottom - 15,
+                        onPan: (d) {
+                          setState(() {
+                            _cropW = (_cropW + d.delta.dx / _boxW).clamp(0.1, 1.0 - _cropL);
+                            _cropH = (_cropH + d.delta.dy / _boxH).clamp(0.1, 1.0 - _cropT);
+                          });
+                        }
+                      ),
+                    ],
+
+                    if (_isUploading)
+                      Container(
+                        color: Colors.black45,
+                        child: const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SpinKitCubeGrid(color: Colors.white, size: 40),
+                              SizedBox(height: 16),
+                              Text('正在由 AI 处理及解析...', style: TextStyle(color: Colors.white)),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              }
             );
           } else {
             return const Center(child: CircularProgressIndicator());
@@ -250,6 +369,55 @@ class _CaptureScreenState extends State<CaptureScreen> {
             ),
     );
   }
+
+  // 辅助构建拖拽手柄
+  Widget _buildHandle({required double left, required double top, required Function(DragUpdateDetails) onPan}) {
+    return Positioned(
+      left: left,
+      top: top,
+      child: GestureDetector(
+        onPanUpdate: onPan,
+        child: Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: const BoxDecoration(color: Colors.transparent),
+          child: const CircleAvatar(
+            radius: 8,
+            backgroundColor: Colors.white,
+            child: Icon(Icons.circle, size: 10, color: Colors.indigo),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// 蒙层绘制：镂空选择框，外围增益黑色遮浮
+class CropOverlayPainter extends CustomPainter {
+  final Rect cropRect;
+  CropOverlayPainter(this.cropRect);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = Colors.black.withOpacity(0.5);
+    final bgPath = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+    final cropPath = Path()..addRect(cropRect);
+    // 差集镂空
+    final path = Path.combine(PathOperation.difference, bgPath, cropPath);
+    canvas.drawPath(path, paint);
+
+    final borderPaint = Paint()
+      ..color = Colors.greenAccent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    canvas.drawRect(cropRect, borderPaint);
+    
+    // 绘制内点网格虚线/标饰（可省）
+  }
+
+  @override
+  bool shouldRepaint(covariant CropOverlayPainter oldDelegate) => oldDelegate.cropRect != cropRect;
 }
 
 
