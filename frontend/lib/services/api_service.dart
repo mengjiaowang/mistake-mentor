@@ -94,7 +94,14 @@ class ApiService {
     }
   }
 
-  Future<bool> uploadQuestion(Uint8List imageBytes, String fileName, {bool mirror = false}) async {
+  Future<bool> uploadQuestion(Uint8List imageBytes, String fileName, {
+    bool mirror = false, 
+    int rotateDegrees = 0,
+    double cropLeft = 0.0,
+    double cropTop = 0.0,
+    double cropWidth = 1.0,
+    double cropHeight = 1.0,
+  }) async {
     try {
       FormData formData = FormData.fromMap({
         'file': MultipartFile.fromBytes(
@@ -102,6 +109,11 @@ class ApiService {
           filename: fileName
         ),
         'mirror': mirror.toString(),
+        'rotate_degrees': rotateDegrees.toString(),
+        'crop_left': cropLeft.toString(),
+        'crop_top': cropTop.toString(),
+        'crop_width': cropWidth.toString(),
+        'crop_height': cropHeight.toString(),
       });
 
       final response = await _dio.post('/api/v1/questions/upload', data: formData);
@@ -182,6 +194,22 @@ class ApiService {
     } catch (e) {
       print('Update tags error: $e');
       return false;
+    }
+  }
+
+  Future<String?> createPaperTicket(String ids, bool showAnswers) async {
+    try {
+      final response = await _dio.post(
+        '/api/v1/questions/paper/ticket',
+        data: {'ids': ids, 'show_answers': showAnswers},
+      );
+      if (response.statusCode == 200) {
+        return response.data["ticket_id"];
+      }
+      return null;
+    } catch (e) {
+      print('Create paper ticket error: $e');
+      return null;
     }
   }
 }
