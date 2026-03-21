@@ -1,0 +1,41 @@
+name: mistake_mentor
+description: "A smart review notebook app with AI assistance."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.6
+  
+  # 网络请求和存储
+  dio: ^5.4.0
+  flutter_secure_storage: ^9.0.0 # 用于持久化 JWT Token
+  
+  # 状态管理
+  provider: ^6.1.1
+  
+  # UI 组件与图片加载
+  cached_network_image: ^3.3.1
+  camera: ^0.10.5+5
+  
+  # 理科公式渲染支持 (LaTeX)
+  flutter_math_fork: 0.7.4
+
+  # 加载指示器
+  flutter_spinkit: ^5.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+

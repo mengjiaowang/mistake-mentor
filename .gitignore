@@ -1,0 +1,21 @@
+# .env 包含硬编码敏感信息的本地临时文件
+.env
+
+# MacOS 临时缓存文件
+.DS_Store
+
+# Python 缓存和虚拟环境
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# VSCode 的项目文件夹
+.vscode/
+
+# Build 文件夹 (自维护)
+build/
+.dart_tool/
