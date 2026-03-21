@@ -31,8 +31,8 @@ def get_password_hash(password):
 # ==========================================
 # 3. 极简本地 mock 数据库 (初始化一个 admin 账号)
 # ==========================================
-# 这里的 "admin" 账号对应的密码是 "admin123"
-DEFAULT_HASHED_PASS = get_password_hash("admin123")
+# 这里的 "admin" 账号对应的密码是从 settings 获取的
+DEFAULT_HASHED_PASS = get_password_hash(settings.ADMIN_PASSWORD)
 
 fake_users_db = {
     "admin": {

@@ -69,7 +69,8 @@ gcloud run deploy $SERVICE_NAME \
   --allow-unauthenticated \
   --cpu 1 \
   --memory 4Gi \
-  --port 8080
+  --port 8080 \
+  --set-env-vars "SECRET_KEY=$SECRET_KEY,ADMIN_PASSWORD=$ADMIN_PASSWORD"
 
 echo "----------------------------------------"
 echo "🎉 部署完成！"

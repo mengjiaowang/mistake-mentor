@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "SUPER_SECRET_KEY_FOR_DEMO_PURPOSES"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
+    ADMIN_PASSWORD: str = "admin123" # 默认初始密码
 
     # 允许从环境变量加载，默认优先读取 .env 文件
     model_config = SettingsConfigDict(
