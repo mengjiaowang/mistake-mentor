@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Form
@@ -141,7 +141,7 @@ async def upload_question(
         "mastery_status": "unmastered", # 默认未掌握
         "is_deleted": False, # 初始化软删除状态为 False
         "tags": ai_result.get("suggested_tags", []), # 使用 AI 推荐的默认标签归类
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": datetime.now(timezone(timedelta(hours=8))).isoformat()
     }
     
     db.collection("questions").document(question_uuid).set(question_doc)

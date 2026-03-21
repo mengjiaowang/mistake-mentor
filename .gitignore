@@ -19,3 +19,6 @@ ENV/
 # Build 文件夹 (自维护)
 build/
 .dart_tool/
+
+# Firebase 文件
+frontend/.firebase/*

@@ -15,8 +15,10 @@ import 'package:url_launcher/url_launcher.dart';
 class MathText extends StatelessWidget {
   final String text;
   final TextStyle? style;
+  final int? maxLines; // 新增
+  final TextOverflow? overflow; // 新增
 
-  const MathText(this.text, {this.style, Key? key}) : super(key: key);
+  const MathText(this.text, {this.style, this.maxLines, this.overflow, Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -52,6 +54,8 @@ class MathText extends StatelessWidget {
 
     return Text.rich(
       TextSpan(children: spans),
+      maxLines: maxLines, // 新增
+      overflow: overflow, // 新增
     );
   }
 }
@@ -172,7 +176,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('MistakeMentor - 错题笔记本'),
+        title: const Text('王铮的错题本'), // 已更新
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
         actions: [
@@ -275,14 +279,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _formatTimestamp(String ts) {
     if (ts.isEmpty) return '未知';
     try {
+      final dt = DateTime.parse(ts).toLocal(); 
+      final date = "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}";
+      final time = "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}";
+      return '$date $time';
+    } catch (e) {
       if (ts.contains('T')) {
         final parts = ts.split('T');
         final date = parts[0];
         final time = parts[1].split('.').first;
         return '$date $time';
       }
-      return ts;
-    } catch (e) {
       return ts;
     }
   }
@@ -358,6 +365,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       MathText(
                         item.questionText,
                         style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 6),
                       Align(
@@ -739,8 +748,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                if (name.isNotEmpty) {
                   await apiService.addTag(name);
                   setDialogState(() {
-                     availableTags.add(name);
-                     currentTags.add(name);
+                      availableTags.add(name);
+                      currentTags.add(name);
                   });
                   if (context.mounted) Navigator.pop(context); // 关闭二级
                }
