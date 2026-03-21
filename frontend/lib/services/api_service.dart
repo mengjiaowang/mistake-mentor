@@ -75,13 +75,22 @@ class ApiService {
   // 2. 错题管理服务
   // ==========================================
   
-  Future<List<QuestionModel>> fetchQuestions({String? knowledgePoint, String? tag, bool isDeleted = false}) async {
+  Future<List<QuestionModel>> fetchQuestions({
+    String? knowledgePoint, 
+    String? tag, 
+    bool isDeleted = false,
+    int? limit,
+    int? offset,
+  }) async {
     try {
       final response = await _dio.get('/api/v1/questions/', queryParameters: {
         if (knowledgePoint != null) 'knowledge_point': knowledgePoint,
         if (tag != null) 'tag': tag,
         'is_deleted': isDeleted,
+        if (limit != null) 'limit': limit,
+        if (offset != null) 'offset': offset,
       });
+
       
       if (response.statusCode == 200) {
         final List<dynamic> data = response.data['questions'];

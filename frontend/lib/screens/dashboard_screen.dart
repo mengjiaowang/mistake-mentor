@@ -76,13 +76,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isPlayingTts = false; // 新增：播放状态
   String? _currentPlayingQid; // 新增：当前播放的错题 ID
 
+  final ScrollController _scrollController = ScrollController(); // 新增：滚动控制器
   List<QuestionModel> _questions = [];
 
   bool _isLoading = true;
+  bool _isLoadingMore = false; // 新增：加载更多状态
+  bool _hasMore = true;        // 新增：是否还有更多
+  int _currentOffset = 0;      // 新增：偏移量
+  final int _limit = 24;       // 新增：每页极限页长
   
   // 新增科目过滤状态
   List<String> _allTags = ["全部"];
   String _selectedTag = "全部";
+
 
   // --- 新增：试卷导出与多选状态 ---
   bool _isSelectionMode = false;
@@ -93,51 +99,82 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _loadData();
+    _scrollController.addListener(_scrollListener); // 新增滚动监听
     widget.refreshNotifier?.addListener(_loadData); // 添加流监听
+  }
+
+  void _scrollListener() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      if (_hasMore && !_isLoading && !_isLoadingMore) {
+        _loadData(isLoadMore: true);
+      }
+    }
   }
 
   @override
   void dispose() {
+    _scrollController.dispose(); // 释放控制器
     _audioPlayer.dispose(); // 新增：释放播放器
     widget.refreshNotifier?.removeListener(_loadData); // 销毁监听
     super.dispose();
   }
 
-  Future<void> _loadData() async {
-    setState(() => _isLoading = true);
+
+  Future<void> _loadData({bool isLoadMore = false}) async {
+    if (isLoadMore) {
+      if (!_hasMore || _isLoadingMore) return;
+      setState(() => _isLoadingMore = true);
+    } else {
+      setState(() {
+         _isLoading = true;
+         _currentOffset = 0; // 重置
+         _hasMore = true;
+      });
+    }
+
     try {
       // 同时拉取标签列表
       final tags = await apiService.fetchTags();
       
-      // 拉法支持过滤项
       final fetchTag = _selectedTag == '全部' ? null : _selectedTag;
-      List<QuestionModel> data = await apiService.fetchQuestions(tag: fetchTag);
+      List<QuestionModel> data = await apiService.fetchQuestions(
+        tag: fetchTag,
+        limit: _limit,
+        offset: _currentOffset,
+      );
       
-      // 时间跨度本地过滤
       if (_selectedDateRange != null) {
         data = data.where((q) {
           try {
             final ct = DateTime.parse(q.createdAt);
             final start = _selectedDateRange!.start;
-            // 截至时间设置为当天 23:59:59 确保全天覆盖
             final end = _selectedDateRange!.end.add(const Duration(days: 1)); 
             return ct.isAfter(start) && ct.isBefore(end);
-          } catch (_) {
-            return true;
-          }
+          } catch (_) { return true; }
         }).toList();
       }
 
       setState(() {
          _allTags = ["全部", ...tags];
-         _questions = data;
+         if (isLoadMore) {
+           _questions.addAll(data);
+         } else {
+           _questions = data;
+         }
+         _currentOffset += data.length;
+         _hasMore = data.length == _limit; // 如果返回等于 limit 说明还有
          _isLoading = false;
+         _isLoadingMore = false;
       });
     } catch (e) {
       print('Load dashboard error: $e');
-      setState(() => _isLoading = false);
+      setState(() {
+         _isLoading = false;
+         _isLoadingMore = false;
+      });
     }
   }
+
 
   void _exportPaper() async {
     if (_selectedQuestionIds.isEmpty) return;
@@ -262,23 +299,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Expanded(
                   child: _questions.isEmpty
                       ? const Center(child: Text('暂无相关错题，快去拍照录入吧！'))
-                      : Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: GridView.builder(
-                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 2, // 适合平板
-                              childAspectRatio: 3 / 2,
-                              crossAxisSpacing: 10,
-                              mainAxisSpacing: 10,
+                      : CustomScrollView(
+                          controller: _scrollController,
+                          slivers: [
+                            SliverPadding(
+                              padding: const EdgeInsets.all(8.0),
+                              sliver: SliverGrid(
+                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 2,
+                                  childAspectRatio: 3 / 2,
+                                  crossAxisSpacing: 10,
+                                  mainAxisSpacing: 10,
+                                ),
+                                delegate: SliverChildBuilderDelegate(
+                                  (context, index) => _buildCard(_questions[index]),
+                                  childCount: _questions.length,
+                                ),
+                              ),
                             ),
-                            itemCount: _questions.length,
-                            itemBuilder: (context, index) {
-                              final item = _questions[index];
-                              return _buildCard(item);
-                            },
-                          ),
+                            if (_isLoadingMore)
+                              const SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: Center(child: SpinKitFadingCircle(color: Colors.indigo, size: 25)),
+                                ),
+                              ),
+                            if (!_hasMore && _questions.isNotEmpty)
+                              const SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: Center(child: Text('💡 已加载全部题目', style: TextStyle(color: Colors.grey, fontSize: 13))),
+                                ),
+                              ),
+                          ],
                         ),
                 ),
+
               ],
             ),
     );
@@ -421,30 +477,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.85,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 1. 固定头部 (关闭按钮 + 标题)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        bool showSimilarAnalysis = false;
+        bool showSimilarAnswer = false;
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('📌 题目详情', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: Colors.indigo)),
-                        const SizedBox(height: 4),
-                        Text('录入时间: ${_formatTimestamp(item.createdAt)}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                      ],
-                    ),
-                  ),
+                  // 1. 固定头部 (关闭按钮 + 标题)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('📌 题目详情', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: Colors.indigo)),
+                            const SizedBox(height: 4),
+                            Text('录入时间: ${_formatTimestamp(item.createdAt)}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                          ],
+                        ),
+                      ),
+
                   IconButton(
                     icon: const Icon(Icons.close_rounded, color: Colors.grey),
                     onPressed: () => Navigator.pop(context),
@@ -591,20 +653,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       const SizedBox(height: 8),
                       if (item.similarQuestion != null) ...[
                          MathText(item.similarQuestion!['question_text'] ?? '暂无'),
-                         if (item.similarQuestion!['answer'] != null && item.similarQuestion!['answer'].toString().isNotEmpty) ...[
-                           const SizedBox(height: 12),
-                           const Text('✅ 参考答案：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green)),
-                           const SizedBox(height: 4),
-                           MathText(item.similarQuestion!['answer'].toString()),
-                         ],
+                         const SizedBox(height: 12),
+
+                         // 1. 解析过程 (交换至前方)
                          if (item.similarQuestion!['analysis'] != null && item.similarQuestion!['analysis'].toString().isNotEmpty) ...[
+                           Row(
+                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                             children: [
+                               const Text('📝 解析过程：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blueGrey)),
+                               TextButton.icon(
+                                 onPressed: () => setModalState(() => showSimilarAnalysis = !showSimilarAnalysis),
+                                 icon: Icon(showSimilarAnalysis ? Icons.expand_less : Icons.expand_more, color: Colors.blueGrey),
+                                 label: Text(showSimilarAnalysis ? '隐藏' : '点击查看', style: const TextStyle(color: Colors.blueGrey, fontSize: 13)),
+                               ),
+                             ],
+                           ),
+                           if (showSimilarAnalysis) ...[
+                             const SizedBox(height: 4),
+                             MathText(item.similarQuestion!['analysis'].toString()),
+                           ],
                            const SizedBox(height: 12),
-                           const Text('📝 解析过程：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blueGrey)),
-                           const SizedBox(height: 4),
-                           MathText(item.similarQuestion!['analysis'].toString()),
+                         ],
+
+                         // 2. 参考答案 (交换至后方)
+                         if (item.similarQuestion!['answer'] != null && item.similarQuestion!['answer'].toString().isNotEmpty) ...[
+                           Row(
+                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                             children: [
+                               const Text('✅ 参考答案：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green)),
+                               TextButton.icon(
+                                 onPressed: () => setModalState(() => showSimilarAnswer = !showSimilarAnswer),
+                                 icon: Icon(showSimilarAnswer ? Icons.expand_less : Icons.expand_more, color: Colors.green),
+                                 label: Text(showSimilarAnswer ? '隐藏' : '点击查看', style: const TextStyle(color: Colors.green, fontSize: 13)),
+                               ),
+                             ],
+                           ),
+                           if (showSimilarAnswer) ...[
+                             const SizedBox(height: 4),
+                             MathText(item.similarQuestion!['answer'].toString()),
+                           ],
                          ],
                       ] else
                          const Text('生成中...'),
+
                       const Divider(height: 30),
 
                       // ==========================================
@@ -635,8 +726,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ],
           ),
-        );
+            ); // Container End
+          }, // StatefulBuilder builder End
+        ); // StatefulBuilder End
       },
+
     ).whenComplete(() {
       _audioPlayer.stop();
       _isPlayingTts = false;

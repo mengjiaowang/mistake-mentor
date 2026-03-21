@@ -183,23 +183,28 @@ async def list_questions(
     current_user: User = Depends(get_current_user),
     knowledge_point: Optional[str] = None,
     tag: Optional[str] = None, # 新增：支持标签过滤
-    is_deleted: bool = False # 新增：默认不查询回收站
+    is_deleted: bool = False, # 新增：默认不查询回收站
+    limit: int = 24, # 新增：分页大小
+    offset: int = 0  # 新增：偏移量
 ):
-    """获取错题列表，支持考点及标签筛选"""
-    query = db.collection("questions").where("user_id", "==", current_user.username)
+    """获取错题列表，支持分页、考点及标签筛选"""
+    query = db.collection("questions")\
+              .where("user_id", "==", current_user.username)\
+              .where("is_deleted", "==", is_deleted)
+              
     if knowledge_point:
         query = query.where("knowledge_point", "==", knowledge_point)
     if tag:
         # 使用 Firestore 阵列包含语法过滤
         query = query.where("tags", "array_contains", tag)
     
-    docs = query.stream()
-    result = []
-    for doc in docs:
-         data = doc.to_dict()
-         # 兼容性设计：如果历史数据没有 is_deleted 字段，默认就是 False（未删除）
-         if data.get("is_deleted", False) == is_deleted:
-              result.append(data)
+    # 按照时间降序排序，并分页截断 (完全委派给 Firestore 执行)
+    docs = query.order_by("created_at", direction=firestore.Query.DESCENDING)\
+                .offset(offset)\
+                .limit(limit)\
+                .stream()
+
+    result = [doc.to_dict() for doc in docs]
          
     return {"questions": result}
 

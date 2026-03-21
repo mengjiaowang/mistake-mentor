@@ -11,14 +11,10 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    cameras = await availableCameras();
-  } catch (e) {
-    print('Error initializing cameras: $e');
-  }
-  
+  // 不再在 main() 中全局初始化摄像头，避免一进 App（包括登录页）就申请浏览器权限
   runApp(const MistakeMentorApp());
 }
+
 
 class MistakeMentorApp extends StatelessWidget {
   const MistakeMentorApp({Key? key}) : super(key: key);
@@ -115,6 +111,14 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
+          if (cameras.isEmpty) {
+            try {
+              cameras = await availableCameras();
+            } catch (e) {
+              print('Error initializing cameras: $e');
+            }
+          }
+
           if (cameras.isNotEmpty) {
             final result = await Navigator.push(
               context,
@@ -127,9 +131,12 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                _refreshNotifier.value = !_refreshNotifier.value;
             }
           } else {
-             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未检测到可用摄像头！')));
+             if (mounted) {
+               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未检测到可用摄像头！')));
+             }
           }
         },
+
         backgroundColor: Colors.indigo,
         child: const Icon(Icons.camera_alt, color: Colors.white, size: 28),
       ),

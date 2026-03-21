@@ -26,11 +26,24 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
   Future<void> _loadDeletedItems() async {
     setState(() => _isLoading = true);
     final data = await apiService.fetchQuestions(isDeleted: true);
+    
+    // 按时间降序排序 (后上传的排在前面)
+    data.sort((a, b) {
+      try {
+        final dtA = DateTime.parse(a.createdAt);
+        final dtB = DateTime.parse(b.createdAt);
+        return dtB.compareTo(dtA);
+      } catch (_) {
+        return 0;
+      }
+    });
+
     setState(() {
       _deletedQuestions = data;
       _isLoading = false;
     });
   }
+
 
   @override
   Widget build(BuildContext context) {
