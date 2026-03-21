@@ -315,6 +315,48 @@ async def update_question_tags(
     return {"message": "标签绑定成功", "tags": request.tags}
 
 # ==========================================
+# 4. 批量管理接口 (Batch Operations)
+# ==========================================
+
+class BatchRequest(BaseModel):
+    ids: List[str]
+
+@router.post("/batch/restore")
+async def batch_restore_questions(
+    request: BatchRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """批量从回收站恢复错题"""
+    batch = db.batch()
+    # 分片处理，Firestore 'in' 查询限制单次最多 30 个项目
+    chunks = [request.ids[i:i + 30] for i in range(0, len(request.ids), 30)]
+    count = 0
+    for chunk in chunks:
+        docs = db.collection("questions").where("user_id", "==", current_user.username).where("id", "in", chunk).stream()
+        for doc in docs:
+            batch.update(doc.reference, {"is_deleted": False})
+            count += 1
+    batch.commit()
+    return {"message": f"成功恢复 {count} 道错题 到错题本"}
+
+@router.post("/batch/permanent")
+async def batch_permanent_delete_questions(
+    request: BatchRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """批量永久删除回收站错题 (不可逆)"""
+    batch = db.batch()
+    chunks = [request.ids[i:i + 30] for i in range(0, len(request.ids), 30)]
+    count = 0
+    for chunk in chunks:
+        docs = db.collection("questions").where("user_id", "==", current_user.username).where("id", "in", chunk).stream()
+        for doc in docs:
+            batch.delete(doc.reference)
+            count += 1
+    batch.commit()
+    return {"message": f"成功永久删除 {count} 道错题"}
+
+# ==========================================
 # 4. 试卷生成与导出接口
 # ==========================================
 

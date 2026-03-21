@@ -212,6 +212,31 @@ class ApiService {
       return null;
     }
   }
+  Future<bool> batchRestoreQuestions(List<String> questionIds) async {
+    try {
+      final response = await _dio.post(
+        '/api/v1/questions/batch/restore',
+        data: {'ids': questionIds},
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      print('Batch Restore error: $e');
+      return false;
+    }
+  }
+
+  Future<bool> batchPermanentDeleteQuestions(List<String> questionIds) async {
+    try {
+      final response = await _dio.post(
+        '/api/v1/questions/batch/permanent',
+        data: {'ids': questionIds},
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      print('Batch Permanent Delete error: $e');
+      return false;
+    }
+  }
 }
 
 // 单例模式提供全局访问
