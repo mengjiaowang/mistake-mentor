@@ -6,13 +6,16 @@
 
 ---
 
-## 📖 1. 项目简介与目的
+## 📖 1. 项目简介与核心特性
 
 本项目的目的是为降低学生整理错题集的时间成本。通过手机端拍照快速采集，利用谷歌云先进的图像处理及大模型（Vertex AI）能力：
 
-1.  **还原空白题目**：利用 `Imagen 3` 像素级擦除手写批改和答案痕迹。
-2.  **公式及文字精准数字化**：利用 `Gemini 3.1` 提取文本、对齐 `LaTeX` 公式符号。
-3.  **启发式 AI 解析及一键“举一反三”**：不直接给答案，而是给出分步推理和相似的变式训练题，做一题学一类。
+1. **还原空白题目**：利用 `Imagen 3` 像素级擦除手写批改和答案痕迹。
+2. **公式及文字精准数字化**：利用 `Gemini 3.1` 提取文本、对齐 `LaTeX` 公式符号。
+3. **启发式 AI 解析及一键“举一反三”**：不直接给答案，而是给出分步推理和相似的变式训练题，做一题学一类。**新增相似题折叠功能**，界面更清爽。
+4. **沉浸式语音播报 (TTS)**：集成 Google Cloud TTS (Neural2/Studio语音)，支持高质量的题目解析朗读。
+5. **多主题支持 (含护眼模式)**：支持浅色、深色，以及专为长时间学习设计的**蓝光过滤护眼模式**。
+6. **回收站批量管理**：支持一键批量删除或恢复回收站中的错题记录。
 
 ---
 
@@ -22,18 +25,19 @@
 
 基于 **FastAPI (Python)** 部署于 **Google Cloud Run**。
 
-- [**`app/services/gcp_ai_service.py`**](file:///Users/mengjiaowang/vscode/learning_assistant/backend/app/services/gcp_ai_service.py)
-  - 集成 **Vertex AI**。使用 `Imagen` 擦除字迹，使用 `Gemini` 输出符合接口规范的结构化 `JSON`（题干、考点、步骤、变式题）。
-- [**`app/routers/questions.py`**](file:///Users/mengjiaowang/vscode/learning_assistant/backend/app/routers/questions.py)
-  - 管理业务入口。包含图片直接安全上载至 **Cloud Storage (GCS)** 以及将错题元数据流水写入 **Firestore**。
+- [**`app/services/gcp_ai_service.py`**](backend/app/services/gcp_ai_service.py)
+  - 集成 **Vertex AI**。使用 `Imagen` 擦除字迹，使用 `Gemini` 输出符合接口规范的结构化 `JSON`（题干、考点、步骤、变式题）。集成 Cloud TTS 提供语音合成。
+- [**`app/routers/questions.py`**](backend/app/routers/questions.py)
+  - 管理业务入口。包含图片直接安全上载至 **Cloud Storage (GCS)** 以及将错题元数据流水写入 **Firestore**。支持基于内存排序的高效标签检索。
 
 ### 📱 2.2 前端客户端架构 (`/frontend`)
 
-使用 **Flutter** 构建，支持移动/平板大屏。
+使用 **Flutter** 构建，支持移动/平板大屏以及 Web 发布。
 
 - `lib/services/api_service.dart`：绑定 Dio 模块，无缝附加 JWT 安全锁进行上载流控。
-- `lib/screens/dashboard_screen.dart`：错题详情面板卡片。
+- `lib/screens/dashboard_screen.dart`：错题详情面板卡片，支持主题切换与语音播报控制。
 - `lib/screens/capture_screen.dart`：支持一键调用相机触发 `/questions/upload`。
+- `lib/theme.dart`：全局主题管理器，支持浅色/深色/护眼模式无缝切换。
 
 ---
 
@@ -85,26 +89,32 @@ cd frontend
 # 2. 获取依赖包
 flutter pub get
 
-# 3. 启动应用并选择运行设备 (平板/手机模拟器或真机)
-flutter run
+# 3. 启动应用在 Chrome 浏览器进行本地调试
+flutter run -d chrome
 ```
 
 > 💡 **小贴士**：默认 `baseUrl` 为本地 `http://127.0.0.1:8000`。若需接入云端，请修改 `lib/services/api_service.dart` 中的变量。
 
 ---
 
-## 🚢 4. 云端一键部署 (Google Cloud Run)
+## 🚢 4. 云端全栈一键部署
 
-### 一键脚本自动化
+项目提供了一键编译发布脚本，将后端部署至 **Google Cloud Run**，前端 Web 部署至 **Firebase Hosting**。
 
-如果您本地已经配置了 `gcloud`：
+### 一键部署命令
+
+请确保本地已配置 `gcloud` 和 `firebase-tools`：
 
 ```bash
-cd backend
+# 在项目根目录下运行 (默认部署前后端)
 ./deploy.sh
+
+# 可选独立部署:
+./deploy.sh backend   # 仅部署后端
+./deploy.sh frontend  # 仅部署前端
 ```
 
-脚本会自动启用依赖 APIs，将代码托管给 Cloud Build 打包，最终一站式发布至 **东京地区 (`asia-northeast1`)**。
+脚本会自动启用依赖的 GCP API，后端推送构建镜像至东京区域 (`asia-northeast1`)，前端编译 Flutter Web Release 包并同步至 Firebase。
 
 ---
 
