@@ -9,8 +9,8 @@ import 'recycle_bin_screen.dart';
 import 'package:flutter_math_fork/flutter_math.dart'; // 导入公式渲染包
 import 'package:url_launcher/url_launcher.dart';
 import 'package:audioplayers/audioplayers.dart'; // 新增：语音播报
+import 'package:flutter/foundation.dart'; // 新增 kIsWeb
 import '../main.dart'; // 引入 themeNotifier
-
 
 // ==========================================
 // 自定义混合文本渲染控件 (支持行内 $...$ 公式)
@@ -592,7 +592,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               return IconButton(
                                 icon: isPlaying 
                                     ? const SpinKitRing(color: Colors.green, size: 24, lineWidth: 2) 
-                                    : const Icon(Icons.volume_up_rounded, color: Colors.green, size: 26),
+                                    : const Icon(Icons.volume_up, color: Colors.green, size: 26),
                                 tooltip: '语音朗读解析',
                                 onPressed: isPlaying ? () async {
                                   await _audioPlayer.stop();
@@ -607,7 +607,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   });
                                   final ticketId = await apiService.createTtsTicket(item.id);
                                   if (ticketId != null) {
-                                      final url = '${ApiService.baseUrl}/api/v1/questions/tts?ticket_id=$ticketId';
+                                      String url = '${ApiService.baseUrl}/api/v1/questions/tts?ticket_id=$ticketId';
+                                      
+                                      // Web 端如果 baseUrl 为空，补全 origin 使 audioplayers 正常加载
+                                      if (kIsWeb && ApiService.baseUrl.isEmpty) {
+                                          url = '${Uri.base.origin}$url';
+                                      }
+
                                       try {
                                           await _audioPlayer.play(UrlSource(url));
                                           _audioPlayer.onPlayerComplete.first.then((_) {

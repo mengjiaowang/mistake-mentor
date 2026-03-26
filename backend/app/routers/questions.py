@@ -194,19 +194,22 @@ async def list_questions(
               
     if knowledge_point:
         query = query.where("knowledge_point", "==", knowledge_point)
-    if tag:
-        # 使用 Firestore 阵列包含语法过滤
-        query = query.where("tags", "array_contains", tag)
     
-    # 按照时间降序排序，并分页截断 (完全委派给 Firestore 执行)
-    docs = query.order_by("created_at", direction=firestore.Query.DESCENDING)\
-                .offset(offset)\
-                .limit(limit)\
-                .stream()
-
-    result = [doc.to_dict() for doc in docs]
-         
-    return {"questions": result}
+    if tag:
+        # 使用全量查询然后在内存排序和截断，避免强制要求复合索引
+        query = query.where("tags", "array_contains", tag)
+        docs = query.stream()
+        result = [doc.to_dict() for doc in docs]
+        result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return {"questions": result[offset:offset+limit]}
+    else:
+        # 原有逻辑：由 Firestore 排序截断 (已建立了对应索引)
+        docs = query.order_by("created_at", direction=firestore.Query.DESCENDING)\
+                    .offset(offset)\
+                    .limit(limit)\
+                    .stream()
+        result = [doc.to_dict() for doc in docs]
+        return {"questions": result}
 
 @router.get("/tts")
 async def get_tts(
