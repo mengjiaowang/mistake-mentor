@@ -9,16 +9,12 @@ from pydantic import BaseModel
 
 from app.config import settings
 
-# ==========================================
-# 1. 基础配置 (自用版可写在代码中，生产建议点.env)
-# ==========================================
+# 基础配置
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = settings.ALGORITHM
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
-# ==========================================
-# 2. 安全与密码哈希模块
-# ==========================================
+# 安全与密码哈希
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -28,9 +24,7 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     return pwd_context.hash(password)
 
-# ==========================================
-# 3. 极简本地 mock 数据库 (初始化一个 admin 账号)
-# ==========================================
+# 初始化本地 Mock 数据库与默认账号
 # 这里的 "admin" 账号对应的密码是从 settings 获取的
 DEFAULT_HASHED_PASS = get_password_hash(settings.ADMIN_PASSWORD)
 
@@ -43,9 +37,7 @@ fake_users_db = {
     }
 }
 
-# ==========================================
-# 4. Pydantic 模型
-# ==========================================
+# Pydantic 模型
 class User(BaseModel):
     username: str
     full_name: Optional[str] = None
@@ -55,9 +47,7 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
-# ==========================================
-# 5. JWT 生成与验证工具
-# ==========================================
+# JWT 工具函数
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
@@ -86,9 +76,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
     return User(**user)
 
-# ==========================================
-# 6. FastAPI 主实例与接口
-# ==========================================
+# FastAPI 实例定义
 app = FastAPI(
     title="智能错题本 (MistakeMentor) Backend",
     description="家庭/自用版极简后端架构 (基于 FastAPI)",
@@ -105,8 +93,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.routers import questions
+from app.routers import questions, reviews
 app.include_router(questions.router)
+app.include_router(reviews.router)
 
 @app.get("/health", tags=["System"])
 async def health_check():

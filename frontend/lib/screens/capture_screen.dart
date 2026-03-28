@@ -1,16 +1,26 @@
 import 'dart:io';
 import 'dart:typed_data';
-
+import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
+import 'package:image_picker/image_picker.dart';
 import '../services/api_service.dart';
 
 import '../main.dart';
 
 class CaptureScreen extends StatefulWidget {
-  const CaptureScreen({Key? key}) : super(key: key);
+  final List<CameraDescription> cameras;
+  final Uint8List? initialImageBytes;
+  final String? initialImageName;
+
+  const CaptureScreen({
+    Key? key,
+    required this.cameras,
+    this.initialImageBytes,
+    this.initialImageName,
+  }) : super(key: key);
 
   @override
   _CaptureScreenState createState() => _CaptureScreenState();
@@ -21,10 +31,10 @@ class _CaptureScreenState extends State<CaptureScreen> {
   late Future<void> _initializeControllerFuture;
   bool _isUploading = false;
   int _cameraIndex = 0;
-  bool _isMirrored = false; // 新增：是否开启镜像翻转
-  int _rotationTurns = 0;   // 新增：旋转四分位角 (0, 1, 2, 3 -> 0, 90, 180, 270度)
+  bool _isMirrored = false;
+  int _rotationTurns = 0;
   
-  // --- 新增：裁剪相关状态 ---
+  // 裁剪相关状态
   bool _isCropping = false;
   double _cropL = 0.1; // 裁剪框左侧比例
   double _cropT = 0.2; // 裁剪框顶部比例
@@ -33,47 +43,55 @@ class _CaptureScreenState extends State<CaptureScreen> {
   double _boxW = 0;    // 当前绘制容器视口宽度
   double _boxH = 0;    // 当前绘制容器视口高度
 
-  // 新增：保存拍摄后的冷冻帧数据
+  // 保存拍摄后的冷冻帧数据
   Uint8List? _capturedImageBytes;
 
   String? _capturedImageName;
+  
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
-    _findBackCamera();
-    _initController();
+    _capturedImageBytes = widget.initialImageBytes;
+    _capturedImageName = widget.initialImageName;
+
+    if (widget.cameras.isNotEmpty) {
+      _findBackCamera();
+      _initController();
+    } else {
+      _initializeControllerFuture = Future.value();
+    }
   }
 
   void _findBackCamera() {
-    if (cameras.isEmpty) return;
-    int index = cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
+    int index = widget.cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
     // 找到后置则使用后置，否则默认第一个
     _cameraIndex = index >= 0 ? index : 0;
   }
 
   void _initController() {
-    if (cameras.isEmpty) return;
     _controller = CameraController(
-      cameras[_cameraIndex],
+      widget.cameras[_cameraIndex],
       ResolutionPreset.high,
+      enableAudio: false, // 不请求麦克风权限
     );
     _initializeControllerFuture = _controller.initialize();
   }
 
   Future<void> _toggleCamera() async {
-    if (cameras.length <= 1) return;
+    if (widget.cameras.length <= 1) return;
     
     await _controller.dispose();
     setState(() {
-      _cameraIndex = (_cameraIndex + 1) % cameras.length;
+      _cameraIndex = (_cameraIndex + 1) % widget.cameras.length;
       _initController();
     });
   }
 
   @override
   void dispose() {
-    if (cameras.isNotEmpty) {
+    if (widget.cameras.isNotEmpty) {
       _controller.dispose();
     }
     super.dispose();
@@ -97,15 +115,37 @@ class _CaptureScreenState extends State<CaptureScreen> {
     }
   }
 
+  Future<void> _pickImageFromGallery() async {
+    try {
+      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      if (image != null) {
+        final bytes = await image.readAsBytes();
+        setState(() {
+          _capturedImageBytes = bytes;
+          _capturedImageName = image.name;
+          _rotationTurns = 0; // 重置旋转
+          _isMirrored = false; // 重置镜像
+        });
+      }
+    } catch (e) {
+      print('Pick image error: $e');
+    }
+  }
+
   Future<void> _confirmUpload() async {
     if (_capturedImageBytes == null) return;
     
     try {
       setState(() => _isUploading = true);
       
+      // 获取图片的真实尺寸
+      final ui.Image decodedImage = await decodeImageFromList(_capturedImageBytes!);
+      double actualImgW = decodedImage.width.toDouble();
+      double actualImgH = decodedImage.height.toDouble();
+
       // 计算 BoxFit.cover 缩放及切角偏移
-      double imgW = _rotationTurns % 2 == 1 ? _controller.value.previewSize!.height : _controller.value.previewSize!.width;
-      double imgH = _rotationTurns % 2 == 1 ? _controller.value.previewSize!.width : _controller.value.previewSize!.height;
+      double imgW = _rotationTurns % 2 == 1 ? actualImgH : actualImgW;
+      double imgH = _rotationTurns % 2 == 1 ? actualImgW : actualImgH;
 
       double scale = _boxW / imgW > _boxH / imgH ? _boxW / imgW : _boxH / imgH; // max
       double renderW = imgW * scale;
@@ -187,7 +227,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
           IconButton(
             icon: const Icon(Icons.flip_camera_ios, color: Colors.white),
             tooltip: '切换摄像头',
-            onPressed: _isUploading ? null : _toggleCamera,
+            onPressed: (_isUploading || widget.cameras.length <= 1) ? null : _toggleCamera,
           )
         ],
       ),
@@ -210,16 +250,19 @@ class _CaptureScreenState extends State<CaptureScreen> {
                 return Stack(
                   children: [
                     // 核心：始终保持 CameraPreview 在底层，避免 Web 卸载导致黑屏
-                    Positioned.fill(
-                      child: RotatedBox(
-                        quarterTurns: _rotationTurns,
-                        child: Transform(
-                          alignment: Alignment.center,
-                          transform: Matrix4.rotationY(_isMirrored ? 3.1415926535897932 : 0),
-                          child: CameraPreview(_controller),
+                    if (widget.cameras.isNotEmpty)
+                      Positioned.fill(
+                        child: RotatedBox(
+                          quarterTurns: _rotationTurns,
+                          child: Transform(
+                            alignment: Alignment.center,
+                            transform: Matrix4.rotationY(_isMirrored ? 3.1415926535897932 : 0),
+                            child: CameraPreview(_controller),
+                          ),
                         ),
-                      ),
-                    ),
+                      )
+                    else 
+                      Container(color: Colors.black),
                     // 若已拍照，静态图片覆盖在上面
                     if (_capturedImageBytes != null)
                       Positioned.fill(
@@ -333,10 +376,23 @@ class _CaptureScreenState extends State<CaptureScreen> {
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: _capturedImageBytes == null
-          ? FloatingActionButton(
-              onPressed: _isUploading ? null : _takePicture,
-              backgroundColor: Colors.white,
-              child: Icon(Icons.camera_alt, color: Theme.of(context).primaryColor, size: 30),
+          ? Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                FloatingActionButton(
+                  heroTag: 'gallery',
+                  onPressed: _isUploading ? null : _pickImageFromGallery,
+                  backgroundColor: Colors.white,
+                  child: Icon(Icons.photo_library, color: Theme.of(context).primaryColor, size: 28),
+                ),
+                const SizedBox(width: 40),
+                FloatingActionButton(
+                  heroTag: 'camera',
+                  onPressed: _isUploading ? null : _takePicture,
+                  backgroundColor: Colors.white,
+                  child: Icon(Icons.camera_alt, color: Theme.of(context).primaryColor, size: 30),
+                ),
+              ],
             )
           : Padding(
               padding: const EdgeInsets.symmetric(horizontal: 40),
@@ -348,10 +404,13 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     onPressed: _isUploading
                         ? null
                         : () {
-                            setState(() {
-                              _capturedImageBytes = null; // 撤销冷冻，回到相机
-
-                            });
+                            if (widget.cameras.isEmpty) {
+                              _pickImageFromGallery();
+                            } else {
+                              setState(() {
+                                _capturedImageBytes = null; // 撤销冷冻，回到相机
+                              });
+                            }
                           },
                     backgroundColor: Colors.red[400],
                     child: const Icon(Icons.refresh, color: Colors.white),

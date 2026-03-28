@@ -5,6 +5,10 @@ class Settings(BaseSettings):
     # GCP Configuration
     PROJECT_ID: str = "learning-assistant-490905"
     
+    # Model Names
+    ERASURE_MODEL: str = "gemini-3.1-flash-image-preview"
+    OCR_MODEL: str = "gemini-3.1-pro-preview"
+    
     # Backend Security
     SECRET_KEY: str = "SUPER_SECRET_KEY_FOR_DEMO_PURPOSES"
     ALGORITHM: str = "HS256"
