@@ -29,8 +29,8 @@ def get_password_hash(password):
 DEFAULT_HASHED_PASS = get_password_hash(settings.ADMIN_PASSWORD)
 
 fake_users_db = {
-    "admin": {
-        "username": "admin",
+    settings.ADMIN_USERNAME: {
+        "username": settings.ADMIN_USERNAME,
         "full_name": "管理员",
         "hashed_password": DEFAULT_HASHED_PASS,
         "disabled": False,
