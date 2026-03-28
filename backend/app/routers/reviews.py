@@ -24,6 +24,7 @@ INTERVALS = [1, 2, 4, 7, 15, 30, 60]
 @router.get("/batch")
 async def get_review_batch(
     current_user: User = Depends(get_current_user),
+    subjects: Optional[List[str]] = Query(None), # 允许用户多选科目
     limit: int = Query(15, ge=1, le=50)
 ):
     """
@@ -31,48 +32,89 @@ async def get_review_batch(
     1. Overdue & Not Mastered
     2. Unreviewed (New questions)
     3. Overdue & Mastered (Maintenance)
+    If subjects are specified, fetch per subject (at most limit per subject) and combine.
     """
     questions_ref = db.collection("questions")
     now_iso = datetime.now(timezone(timedelta(hours=8))).isoformat()
     
-    # Query 1: Unreviewed
-    unrev_query = questions_ref.where(filter=FieldFilter("user_id", "==", current_user.username))\
-                               .where(filter=FieldFilter("is_deleted", "==", False))\
-                               .where(filter=FieldFilter("status", "==", "unreviewed"))\
-                               .limit(limit)
-    
-    # Query 2: Due for review (next_review_date <= now)
-    due_query = questions_ref.where(filter=FieldFilter("user_id", "==", current_user.username))\
-                             .where(filter=FieldFilter("is_deleted", "==", False))\
-                             .where(filter=FieldFilter("next_review_date", "<=", now_iso))\
-                             .limit(limit)
-                             
-    unrev_docs = unrev_query.stream()
-    due_docs = due_query.stream()
-    
     results_map = {}
     
-    for doc in due_docs:
-        # Prioritize unmastered/blurry overdue over mastered
-        data = doc.to_dict()
-        score = 0
-        if data.get("status") in ["unmastered", "blurry"]:
-            score = 100 # Highest priority
-        elif data.get("status") == "mastered":
-            score = 10 # Lower priority maintenance
-        results_map[data["id"]] = {"data": data, "score": score}
-        
-    for doc in unrev_docs:
-        data = doc.to_dict()
-        if data["id"] not in results_map:
-            results_map[data["id"]] = {"data": data, "score": 50} # Medium priority
+    targets = subjects if subjects and len(subjects) > 0 else [None]
+
+    for subj in targets:
+        # 查新题
+        unrev_query = questions_ref.where(filter=FieldFilter("user_id", "==", current_user.username))\
+                                   .where(filter=FieldFilter("is_deleted", "==", False))\
+                                   .where(filter=FieldFilter("status", "==", "unreviewed"))
+        if subj:
+            unrev_query = unrev_query.where(filter=FieldFilter("tags", "array_contains", subj))
+        unrev_query = unrev_query.limit(limit)
+
+        # 查到期题
+        due_query = questions_ref.where(filter=FieldFilter("user_id", "==", current_user.username))\
+                                 .where(filter=FieldFilter("is_deleted", "==", False))\
+                                 .where(filter=FieldFilter("next_review_date", "<=", now_iso))
+        if subj:
+            due_query = due_query.where(filter=FieldFilter("tags", "array_contains", subj))
+        due_query = due_query.limit(limit)
+
+        unrev_docs = unrev_query.stream()
+        due_docs = due_query.stream()
+
+        for doc in due_docs:
+            data = doc.to_dict()
+            score = 0
+            if data.get("status") in ["unmastered", "blurry"]:
+                score = 100
+            elif data.get("status") == "mastered":
+                score = 10
             
-    # Sort by score descending
+            if data["id"] not in results_map or score > results_map[data["id"]]["score"]:
+                results_map[data["id"]] = {"data": data, "score": score}
+
+        for doc in unrev_docs:
+            data = doc.to_dict()
+            if data["id"] not in results_map:
+                results_map[data["id"]] = {"data": data, "score": 50}
+
+    # 按权重排序
     sorted_items = sorted(results_map.values(), key=lambda x: x["score"], reverse=True)
     
-    # Extract data and limit
-    final_batch = [item["data"] for item in sorted_items[:limit]]
+    # 如果指定了具体科目，返回合集（每门限额由拉取控制）；如果是通用，维持老 limit 全局截断
+    actual_limit = limit * len(targets) if subjects else limit
+    final_batch = [item["data"] for item in sorted_items[:actual_limit]]
     
+    return {"questions": final_batch}
+
+@router.get("/free")
+async def get_free_batch(
+    current_user: User = Depends(get_current_user),
+    subjects: Optional[List[str]] = Query(None),
+    limit: int = Query(50, ge=1, le=100) # 限额切片下发以防卡顿
+):
+    """
+    获取自由练习题目：排除掉已完全掌握(mastered)的题目，支持科目多选。
+    """
+    questions_ref = db.collection("questions")
+    
+    query = questions_ref.where(filter=FieldFilter("user_id", "==", current_user.username))\
+                         .where(filter=FieldFilter("is_deleted", "==", False))
+                         
+    if subjects and len(subjects) > 0:
+        query = query.where(filter=FieldFilter("tags", "array_contains_any", subjects))
+        
+    query = query.limit(limit * 2) # 多拉一些用于 Python 过滤
+
+    docs = query.stream()
+    
+    final_batch = []
+    for doc in docs:
+        data = doc.to_dict()
+        if data.get("status") != "mastered":
+            final_batch.append(data)
+        if len(final_batch) >= limit:
+            break
+            
     return {"questions": final_batch}
 
 class ReviewFeedback(BaseModel):

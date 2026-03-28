@@ -97,7 +97,9 @@ if [[ "$TARGET" == "all" || "$TARGET" == "frontend" ]]; then
     if [ -d "frontend" ]; then
         cd frontend
         if [ -f "pubspec.yaml" ]; then
-            echo "🛠️ 正在打包 Flutter Web (Release 模式)..."
+            echo "🛠️ 正在清理并打包 Flutter Web (Release 模式)..."
+            flutter clean
+            flutter pub get
             flutter build web --release
             
             echo "🚀 正在推送到 Firebase Hosting..."

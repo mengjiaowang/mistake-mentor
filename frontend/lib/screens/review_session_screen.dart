@@ -23,14 +23,35 @@ class _ReviewSessionScreenState extends State<ReviewSessionScreen> {
   bool _showSimilarAnswer = false;
   List<QuestionModel> _questions = [];
   int _currentIndex = 0;
+
+  // 新增：科目配置状态
+  bool _isConfiguring = true;
+  List<String> _availableTags = [];
+  List<String> _selectedSubjects = [];
+  bool _isFreeMode = false;
   
   @override
   void initState() {
     super.initState();
-    _loadBatch();
+    _loadConfig();
   }
 
-  Future<void> _loadBatch() async {
+  Future<void> _loadConfig() async {
+    setState(() => _isLoading = true);
+    try {
+      final tags = await apiService.fetchTags();
+      setState(() {
+        _availableTags = tags;
+        _isConfiguring = true; // 停留配置页
+        _isLoading = false;
+      });
+    } catch (e) {
+      print('Load tags error: $e');
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadBatch({bool isFree = false}) async {
     setState(() {
       _isLoading = true;
       _showAnswer = false;
@@ -39,10 +60,14 @@ class _ReviewSessionScreenState extends State<ReviewSessionScreen> {
       _showSimilarAnalysis = false;
       _showSimilarAnswer = false;
       _currentIndex = 0;
+      _isFreeMode = isFree; // 状态模式下坠
+      _isConfiguring = false; // 进入主页复习
     });
     
     try {
-      final questions = await apiService.fetchReviewBatch(limit: 15);
+      final questions = isFree
+          ? await apiService.fetchFreeBatch(_selectedSubjects)
+          : await apiService.fetchReviewBatch(subjects: _selectedSubjects, limit: 15);
       setState(() {
         _questions = questions;
         _isLoading = false;
@@ -107,6 +132,10 @@ class _ReviewSessionScreenState extends State<ReviewSessionScreen> {
       );
     }
 
+    if (_isConfiguring) {
+      return _buildConfigView();
+    }
+
     if (_questions.isEmpty) {
       return Center(
         child: Column(
@@ -117,9 +146,15 @@ class _ReviewSessionScreenState extends State<ReviewSessionScreen> {
             const Text('太棒了！今日复习任务已全部完成 🎉', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              onPressed: _loadBatch,
+              onPressed: () => _loadBatch(isFree: _isFreeMode),
               icon: const Icon(Icons.refresh),
-              label: const Text('再来一组'),
+              label: const Text('按当前模式再来一组'),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: () => setState(() => _isConfiguring = true),
+              icon: const Icon(Icons.arrow_back),
+              label: const Text('返回重选科目/模式'),
             )
           ],
         ),
@@ -347,6 +382,76 @@ class _ReviewSessionScreenState extends State<ReviewSessionScreen> {
                    _buildFeedbackButton('完全掌握', Icons.sentiment_very_satisfied, Colors.green, () => _submitReview('mastered')),
                 ],
               )
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConfigView() {
+    return Scaffold(
+      appBar: AppBar(title: const Text('科目与模式配置'), centerTitle: true),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('📚 请选择要复习的科目（多选）', 
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Theme.of(context).primaryColor)),
+            const SizedBox(height: 16),
+            if (_availableTags.isEmpty)
+              const Text('暂无可用科目标签，请先去首页录入题目并打标。', style: TextStyle(color: Colors.grey))
+            else
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: _availableTags.map((tag) {
+                  final isSelected = _selectedSubjects.contains(tag);
+                  return FilterChip(
+                    label: Text(tag),
+                    selected: isSelected,
+                    onSelected: (selected) {
+                      setState(() {
+                        if (selected) {
+                          _selectedSubjects.add(tag);
+                        } else {
+                          _selectedSubjects.remove(tag);
+                        }
+                      });
+                    },
+                    selectedColor: Theme.of(context).primaryColor.withOpacity(0.2),
+                    checkmarkColor: Theme.of(context).primaryColor,
+                  );
+                }).toList(),
+              ),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.psychology),
+                label: const Text('开启智能复习 (各科目最多15道)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => _loadBatch(isFree: false),
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.flash_on),
+                label: const Text('开启自由刷题 (无限制)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                style: OutlinedButton.styleFrom(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  side: BorderSide(color: Theme.of(context).primaryColor, width: 2),
+                ),
+                onPressed: () => _loadBatch(isFree: true),
+              ),
+            ),
+            const SizedBox(height: 20),
           ],
         ),
       ),

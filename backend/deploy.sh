@@ -70,7 +70,7 @@ gcloud run deploy $SERVICE_NAME \
   --cpu 1 \
   --memory 4Gi \
   --port 8080 \
-  --set-env-vars "SECRET_KEY=$SECRET_KEY,ADMIN_PASSWORD=$ADMIN_PASSWORD"
+  --set-env-vars "SECRET_KEY=$SECRET_KEY,ADMIN_PASSWORD=$ADMIN_PASSWORD,ACCESS_TOKEN_EXPIRE_MINUTES=$ACCESS_TOKEN_EXPIRE_MINUTES"
 
 echo "----------------------------------------"
 echo "🎉 部署完成！"

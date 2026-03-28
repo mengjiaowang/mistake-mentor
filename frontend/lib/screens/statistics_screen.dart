@@ -46,9 +46,13 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
         final now = DateTime.now();
         startStr = now.subtract(const Duration(days: 29)).toIso8601String().split('T')[0];
         endStr = now.toIso8601String().split('T')[0];
-      } else if (_timeRange == 'custom' && _startDate != null && _endDate != null) {
-        startStr = _startDate!.toIso8601String().split('T')[0];
-        endStr = _endDate!.toIso8601String().split('T')[0];
+      } else if (_timeRange == 'custom') {
+        final sDate = _startDate; // 局部快照防竞跑
+        final eDate = _endDate;
+        if (sDate != null && eDate != null) {
+          startStr = sDate.toIso8601String().split('T')[0];
+          endStr = eDate.toIso8601String().split('T')[0];
+        }
       }
 
       final stats = await apiService.fetchStatistics(startDate: startStr, endDate: endStr);

@@ -142,12 +142,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
         offset: _currentOffset,
       );
       
-      if (_selectedDateRange != null) {
+      final currentRange = _selectedDateRange; // 隔离快照防赛跑
+      if (currentRange != null) {
         data = data.where((q) {
           try {
             final ct = DateTime.parse(q.createdAt);
-            final start = _selectedDateRange!.start;
-            final end = _selectedDateRange!.end.add(const Duration(days: 1)); 
+            final start = currentRange.start;
+            final end = currentRange.end.add(const Duration(days: 1)); 
             return ct.isAfter(start) && ct.isBefore(end);
           } catch (_) { return true; }
         }).toList();
@@ -486,7 +487,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (context) {
         bool showSimilarAnalysis = false;
         bool showSimilarAnswer = false;
-        bool showOriginalImage = false;
+        bool showOriginalImage = true; // 首页详情默认显示原图
         bool isRegenerating = false; // 新增：正在重新擦除的状态
         String currentBlankUrl = item.imageBlank; // 新增：本地可变 blank url
 

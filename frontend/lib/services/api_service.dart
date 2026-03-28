@@ -15,6 +15,7 @@ class ApiService {
   
   final Dio _dio = Dio(BaseOptions(baseUrl: baseUrl));
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
+  bool _isRedirecting = false; // 新增：防止 401 并发多次重定向
 
   ApiService() {
     // 注入拦截器，每次请求自动附带 Authorization Token
@@ -29,16 +30,22 @@ class ApiService {
       onError: (DioException e, handler) async {
         if (e.response?.statusCode == 401 && e.requestOptions.path != '/api/v1/auth/login') {
           await _storage.delete(key: 'jwt_token');
-          final context = navigatorKey.currentContext;
-          if (context != null) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('登录已过期，请重新登录！')),
-            );
+          
+          if (!_isRedirecting) {
+            _isRedirecting = true;
+            final context = navigatorKey.currentContext;
+            if (context != null) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('登录已过期，请重新登录！')),
+              );
+            }
+            navigatorKey.currentState?.pushAndRemoveUntil(
+              MaterialPageRoute(builder: (context) => const LoginScreen()),
+              (route) => false,
+            ).then((_) => _isRedirecting = false);
           }
-          navigatorKey.currentState?.pushAndRemoveUntil(
-            MaterialPageRoute(builder: (context) => const LoginScreen()),
-            (route) => false,
-          );
+          // 降级返回，不再向上层抛错，避免控制台报错堆积
+          return handler.resolve(Response(requestOptions: e.requestOptions, statusCode: 401));
         }
         return handler.next(e);
       },
@@ -281,9 +288,13 @@ class ApiService {
   // 4. 复习与统计服务 (Review & Statistics)
   // ==========================================
 
-  Future<List<QuestionModel>> fetchReviewBatch({int limit = 15}) async {
+  Future<List<QuestionModel>> fetchReviewBatch({List<String>? subjects, int limit = 15}) async {
     try {
-      final response = await _dio.get('/api/v1/reviews/batch?limit=$limit');
+      String url = '/api/v1/reviews/batch?limit=$limit';
+      if (subjects != null && subjects.isNotEmpty) {
+        url += subjects.map((s) => '&subjects=${Uri.encodeComponent(s)}').join();
+      }
+      final response = await _dio.get(url);
       if (response.statusCode == 200) {
         final List<dynamic> data = response.data['questions'];
         return data.map((e) => QuestionModel.fromJson(e)).toList();
@@ -292,6 +303,24 @@ class ApiService {
     } catch (e) {
       print('Fetch review batch error: $e');
       throw Exception('Failed to load review batch');
+    }
+  }
+
+  Future<List<QuestionModel>> fetchFreeBatch(List<String> subjects, {int limit = 50}) async {
+    try {
+      String url = '/api/v1/reviews/free?limit=$limit';
+      if (subjects.isNotEmpty) {
+        url += subjects.map((s) => '&subjects=${Uri.encodeComponent(s)}').join();
+      }
+      final response = await _dio.get(url);
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data['questions'];
+        return data.map((e) => QuestionModel.fromJson(e)).toList();
+      }
+      return [];
+    } catch (e) {
+      print('Fetch free batch error: $e');
+      throw Exception('Failed to load free batch');
     }
   }
 
