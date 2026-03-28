@@ -4,11 +4,13 @@ import 'screens/login_screen.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/capture_screen.dart';
+import 'screens/review_session_screen.dart';
+import 'screens/statistics_screen.dart';
 import 'services/api_service.dart';
 
 import 'theme.dart'; // 引入主题
+import 'package:image_picker/image_picker.dart';
 
-List<CameraDescription> cameras = [];
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 // 全局主题切换信号
@@ -96,8 +98,9 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   void initState() {
     super.initState();
     _screens = [
-      DashboardScreen(refreshNotifier: _refreshNotifier), // 注入信号
-      const Center(child: Text('敬请期待复习模式')),
+      DashboardScreen(refreshNotifier: _refreshNotifier), // 实际上是首页错题列表
+      ReviewSessionScreen(refreshNotifier: _refreshNotifier),
+      StatisticsScreen(refreshNotifier: _refreshNotifier),
     ];
   }
 
@@ -109,39 +112,90 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: '面板'),
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: '首页'),
           BottomNavigationBarItem(icon: Icon(Icons.history_edu), label: '复习'),
+          BottomNavigationBarItem(icon: Icon(Icons.insights), label: '看板'),
         ],
       ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          if (cameras.isEmpty) {
-            try {
-              cameras = await availableCameras();
-            } catch (e) {
-              print('Error initializing cameras: $e');
-            }
-          }
-
-          if (cameras.isNotEmpty) {
-            final result = await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const CaptureScreen(),
-              ),
-            );
-            if (result == true) {
-               _refreshNotifier.value = !_refreshNotifier.value;
-            }
-          } else {
-             if (mounted) {
-               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未检测到可用摄像头！')));
-             }
-          }
+        onPressed: () {
+          _showUploadModal(context);
         },
-        child: const Icon(Icons.camera_alt, size: 28),
+        child: const Icon(Icons.add, size: 28),
       ),
+    );
+  }
+
+  void _showUploadModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Wrap(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.camera_alt, color: Colors.blue),
+                title: const Text('拍照上传'),
+                onTap: () async {
+                  Navigator.pop(context); // Close the modal
+                  
+                  List<CameraDescription> available = [];
+                  try {
+                    available = await availableCameras();
+                  } catch (e) {
+                    print('Error initializing cameras: $e');
+                  }
+                  
+                  if (available.isNotEmpty) {
+                    final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => CaptureScreen(cameras: available),
+                      ),
+                    );
+                    if (result == true) {
+                       _refreshNotifier.value = !_refreshNotifier.value;
+                    }
+                  } else {
+                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未检测到可用摄像头！')));
+                  }
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: Colors.green),
+                title: const Text('从相册选择'),
+                onTap: () async {
+                  Navigator.pop(context); // Close the modal
+                  
+                  final ImagePicker picker = ImagePicker();
+                  final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+                  
+                  if (image != null) {
+                    final bytes = await image.readAsBytes();
+                    final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => CaptureScreen(
+                          cameras: const [], // Empty means local image mode
+                          initialImageBytes: bytes,
+                          initialImageName: image.name,
+                        ),
+                      ),
+                    );
+                    if (result == true) {
+                       _refreshNotifier.value = !_refreshNotifier.value;
+                    }
+                  }
+                },
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

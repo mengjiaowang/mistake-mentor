@@ -10,12 +10,14 @@
 
 The purpose of this project is to reduce the time cost for students to organize mistake collections. By capturing photos with a mobile phone and leveraging Google Cloud's advanced image processing and Large Multimodal Models (Vertex AI):
 
-1. **Restore Blank Questions**: Use `Imagen 3` Inpaint-Removal to automatically erase handwritten answers and correction marks from images pixel by pixel.
+1. **Restore Blank Questions**: Use advanced multi-modal visual models to automatically erase handwritten answers and correction marks from images pixel by pixel.
 2. **Formula & Text Digitization**: Use `Gemini 3.1` to extract text and accurately format math formulas into standard `LaTeX` notation.
 3. **Socratic AI Explanations & Variation Generation**: Guide students through reasoning without giving answers directly, and generate "analogous questions". **Similar questions are now collapsible** for a cleaner interface.
 4. **Immersive TTS (Text-to-Speech)**: Integrated Google Cloud TTS (Neural2/Studio) for high-quality audio playback of problem explanations.
 5. **Multi-Theme Support (Eye-Care Mode)**: Offers light, dark, and a specially designed **blue-light filtering eye-care theme** for prolonged study sessions.
 6. **Batch Management**: Supports batch deletion and restoration of questions directly from the Recycle Bin.
+7. **Smart Review System (Ebbinghaus/SM-2 algorithm)**: Dynamically calculates the next review date based on the level of mastery (mastered, blurry, not mastered) to reinforce knowledge points.
+8. **Dashboard Statistics & Rich Charting Analytics**: Comprehensive view of incorrect question distribution, categorized by subject and active review trend analysis (for the last 7 days).
 
 ---
 
@@ -26,7 +28,7 @@ The purpose of this project is to reduce the time cost for students to organize 
 A lightweight & serverless monolithic architecture on **Google Cloud Run (FastAPI)**.
 
 - [**`app/services/gcp_ai_service.py`**](backend/app/services/gcp_ai_service.py)
-  - Integrates **Vertex AI**. Cleans up strokes with `Imagen`, formats to JSON using `Gemini`, and handles high-fidelity voice synthesis using Cloud TTS.
+  - Integrates **Vertex AI**. Leverages multi-modal models to clean up strokes, formats to JSON using `Gemini`, and handles high-fidelity voice synthesis using Cloud TTS.
 - [**`app/routers/questions.py`**](backend/app/routers/questions.py)
   - Serves the main API endpoints for secure photo uploads linking directly into **Cloud Storage (GCS)** and metadata pipelines into **Firestore**. Uses efficient memory-based sorting for complex tag filtering.
 

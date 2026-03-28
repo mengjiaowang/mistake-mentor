@@ -2,8 +2,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Form
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Form, BackgroundTasks
 from google.cloud import firestore, storage
+from google.cloud.firestore_v1.base_query import FieldFilter
 from pydantic import BaseModel
 
 from app.services.gcp_ai_service import ai_service
@@ -16,9 +17,7 @@ router = APIRouter(
 
 from app.config import settings
 
-# ==========================================
-# 1. 初始化 GCP 客户端
-# ==========================================
+# 初始化 GCP 客户端
 PROJECT_ID = settings.PROJECT_ID
 db = firestore.Client(project=PROJECT_ID)
 storage_client = storage.Client(project=PROJECT_ID)
@@ -44,25 +43,102 @@ def upload_to_gcs(image_bytes: bytes, file_name: str, content_type: str = "image
          
     return blob.public_url
 
-# ==========================================
-# 2. 接口端点
-# ==========================================
+# 错题管理接口端点
+
+async def _process_question_background(question_uuid: str, contents: bytes, username: str):
+    """后台任务：处理 AI 全图擦除、Gemini OCR 解析、图表切片去手写，并更新 Firestore"""
+    print(f"[Background] 开始异步处理题目 {question_uuid} ...")
+    
+    url_original = f"/api/v1/questions/{question_uuid}/image" 
+    url_blank = url_original # 兜底
+
+    # [Step 1] 全图擦除手写并存入 GCS
+    try:
+        print("[Background] 正在执行全图抹除手写...")
+        clean_full_bytes = ai_service.remove_handwriting(contents)
+        upload_to_gcs(clean_full_bytes, f"blank/{question_uuid}.jpg")
+        url_blank = f"/api/v1/questions/{question_uuid}/blank"
+    except Exception as e:
+         print(f"[Warning Background] 全图去手写失败，降级为原图: {e}")
+
+    # [Step 2] Gemini 推理 & 结构化解析 (抓取标签库作为 AI 参照)
+    existing_tags = []
+    try:
+        tags_doc = db.collection("tags").document(username).get()
+        if tags_doc.exists:
+            existing_tags = tags_doc.to_dict().get("tags", [])
+    except Exception:
+        pass
+    if not existing_tags:
+        existing_tags = ["语文", "数学", "英语", "物理", "化学"]
+
+    try:
+        ai_result = ai_service.ocr_and_analyze(contents, existing_tags=existing_tags)
+    except Exception as e:
+        print(f"[Error Background] Gemini 解析失败: {e}")
+        ai_result = {"question_text": "解析失败，请检查图像清晰度或稍后重试。"}
+
+    # --- 智能图表提取 + 局部去手写流水线 ---
+    diagram_bbox = ai_result.get("diagram_bbox")
+    url_diagram_clean = None
+    if diagram_bbox and isinstance(diagram_bbox, list) and len(diagram_bbox) == 4:
+         try:
+              from PIL import Image
+              import io
+              orig_img = Image.open(io.BytesIO(contents))
+              W, H = orig_img.size
+              ymin, xmin, ymax, xmax = diagram_bbox
+              left = int(max(0.0, min(1.0, xmin)) * W)
+              top = int(max(0.0, min(1.0, ymin)) * H)
+              right = int(max(0.0, min(1.0, xmax)) * W)
+              bottom = int(max(0.0, min(1.0, ymax)) * H)
+              
+              if right > left + 5 and bottom > top + 5:
+                   cropped_img = orig_img.crop((left, top, right, bottom))
+                   crop_buf = io.BytesIO()
+                   cropped_img.save(crop_buf, format='JPEG', quality=95, subsampling=0)
+                   cropped_bytes = crop_buf.getvalue()
+                   
+                   clean_bytes = ai_service.remove_handwriting(cropped_bytes)
+                   upload_to_gcs(clean_bytes, f"diagram/{question_uuid}.jpg")
+                   url_diagram_clean = f"/api/v1/questions/{question_uuid}/diagram"
+         except Exception as e:
+              print(f"[Warning Background] BBox 图象切片与去手写失败: {e}")
+
+    # [Step 3] 复写更新 Firestore 结果并翻转 status 为 unreviewed
+    updated_fields = {
+        "image_blank": url_blank,
+        "image_diagram_clean": url_diagram_clean,
+        "question_text": ai_result.get("question_text", "无法提取题目，请重试。"),
+        "options": ai_result.get("options"),
+        "knowledge_point": ai_result.get("knowledge_point", "未对齐考点"),
+        "analysis_steps": ai_result.get("analysis_steps", []),
+        "trap_warning": ai_result.get("trap_warning", ""),
+        "similar_question": ai_result.get("similar_question"),
+        "status": "unreviewed",
+        "tags": ai_result.get("suggested_tags", []),
+    }
+    
+    db.collection("questions").document(question_uuid).update(updated_fields)
+    print(f"[Background] 题目 {question_uuid} 异步解析履约完成。")
+
 
 @router.post("/upload")
 async def upload_question(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     mirror: bool = Form(False),
     rotate_degrees: int = Form(0), 
-    crop_left: float = Form(0.0),   # 新增：裁剪百分比 (0.0 - 1.0)
+    crop_left: float = Form(0.0),
     crop_top: float = Form(0.0),
     crop_width: float = Form(1.0),
     crop_height: float = Form(1.0),
     current_user: User = Depends(get_current_user)
 ):
     """
-    1. 上传图片 
-    2. Gemini 3.1 OCR解析
-    3. 存入 Firestore & GCS
+    1. 上传图片 (秒级物理归档)
+    2. 下推 BackgroundTasks 异步跑大模型多模态
+    3. 快速返还 processing 状态给前端
     """
     contents = await file.read()
 
@@ -77,13 +153,12 @@ async def upload_question(
                 img = ImageOps.mirror(img)
                 
             if rotate_degrees == 90:
-                img = img.transpose(Image.ROTATE_270) # 顺 90 -> 逆 270 对齐轴心
+                img = img.transpose(Image.ROTATE_270)
             elif rotate_degrees == 180:
                 img = img.transpose(Image.ROTATE_180)
             elif rotate_degrees == 270:
                 img = img.transpose(Image.ROTATE_90)
                 
-            # --- 新增：根据百分比裁剪 ---
             if crop_left > 0 or crop_top > 0 or crop_width < 1.0 or crop_height < 1.0:
                 W, H = img.size
                 left = int(W * crop_left)
@@ -102,81 +177,58 @@ async def upload_question(
 
     question_uuid = str(uuid.uuid4())
     
-    # [Step 1] 存入 GCS (只保存原图)
+    # [Step 1] 存入 GCS (秒级保存处理后的原图)
     try:
         upload_to_gcs(contents, f"original/{question_uuid}.jpg")
-        # 覆写为后端专属的流式代理路由，绕过 GCS 组织的 Private 策略锁定
         url_original = f"/api/v1/questions/{question_uuid}/image" 
-        url_blank = url_original 
     except Exception as e:
-         print(f"[Warning] GCS 上传失败，降级使用本地 Mock：{e}")
+         print(f"[Warning] GCS 上传原图失败，降级使用本地 Mock：{e}")
          url_original = "http://placeholder.org/original.jpg"
-         url_blank = "http://placeholder.org/blank.jpg"
 
-    # [Step 2] Gemini 推理 & 结构化解析 (先抓取标签库作为 AI 参照)
-    existing_tags = []
+    # [Step 1.5] 生成并上传缩略图 (同步处理，极快位图)
+    url_thumbnail = url_original # 兜底
     try:
-        tags_doc = db.collection("tags").document(current_user.username).get()
-        if tags_doc.exists:
-            existing_tags = tags_doc.to_dict().get("tags", [])
-    except Exception:
-        pass
-    if not existing_tags:
-        existing_tags = ["语文", "数学", "英语", "物理", "化学"] # 默认兜底参考
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(contents))
+        img.thumbnail((350, 350)) # 缩短长边至 350，适配标准移动列表
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=80) 
+        thumb_bytes = buf.getvalue()
+        upload_to_gcs(thumb_bytes, f"thumbnail/{question_uuid}.jpg")
+        url_thumbnail = f"/api/v1/questions/{question_uuid}/thumbnail"
+    except Exception as e:
+         print(f"[Warning] 生成缩略图失败，降级使用原图：{e}")
 
-    ai_result = ai_service.ocr_and_analyze(contents, existing_tags=existing_tags)
-    
-    # --- 新增：智能图表提取 + 局部Imagen去手写流水线 ---
-    diagram_bbox = ai_result.get("diagram_bbox")
-    url_diagram_clean = None
-    if diagram_bbox and isinstance(diagram_bbox, list) and len(diagram_bbox) == 4:
-         try:
-              from PIL import Image
-              orig_img = Image.open(io.BytesIO(contents))
-              W, H = orig_img.size
-              ymin, xmin, ymax, xmax = diagram_bbox
-              left = int(max(0.0, min(1.0, xmin)) * W)
-              top = int(max(0.0, min(1.0, ymin)) * H)
-              right = int(max(0.0, min(1.0, xmax)) * W)
-              bottom = int(max(0.0, min(1.0, ymax)) * H)
-              
-              if right > left + 5 and bottom > top + 5: # 剔除畸形噪点
-                   cropped_img = orig_img.crop((left, top, right, bottom))
-                   crop_buf = io.BytesIO()
-                   cropped_img.save(crop_buf, format='JPEG', quality=95, subsampling=0)
-                   cropped_bytes = crop_buf.getvalue()
-                   
-                   # 单独叫 Imagen 除尘去手写
-                   clean_bytes = ai_service.remove_handwriting(cropped_bytes)
-                   
-                   # 上传 GCS 自主路径
-                   upload_to_gcs(clean_bytes, f"diagram/{question_uuid}.jpg")
-                   url_diagram_clean = f"/api/v1/questions/{question_uuid}/diagram"
-         except Exception as e:
-              print(f"[Warning] BBox 图象切片与去手写流水线失败: {e}")
-    
-    # [Step 3] 编排存入 Firestore
-    question_doc = {
+    # [Step 2] 往 Firestore 插入骨架数据（带友情提示占位，防前端白屏或崩溃）
+    init_doc = {
         "id": question_uuid,
         "user_id": current_user.username,
         "image_original": url_original,
-        "image_blank": url_blank,
-        "image_diagram_clean": url_diagram_clean, # 新增干净配图插图映射
-        "question_text": ai_result.get("question_text", ""),
-        "options": ai_result.get("options"),
-        "knowledge_point": ai_result.get("knowledge_point", "未对齐考点"),
-        "analysis_steps": ai_result.get("analysis_steps", []),
-        "trap_warning": ai_result.get("trap_warning", ""),
-        "similar_question": ai_result.get("similar_question"),
-        "mastery_status": "unmastered", # 默认未掌握
-        "is_deleted": False, # 初始化软删除状态为 False
-        "tags": ai_result.get("suggested_tags", []), # 使用 AI 推荐的默认标签归类
+        "image_thumbnail": url_thumbnail,
+        "image_blank": url_original, # 临时复用原图，等擦除完后覆写
+        "image_diagram_clean": None,
+        "question_text": "📄 题目正在后台 AI 解析中，请稍候...",
+        "options": [],
+        "knowledge_point": "自动考点解析中...",
+        "analysis_steps": ["系统正在努力为您分步解析题意..."],
+        "trap_warning": "⚠️ 易错点提取中...",
+        "similar_question": None,
+        "status": "processing", # 特殊状态
+        "next_review_date": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "current_interval": 1,
+        "review_history": [],
+        "is_deleted": False,
+        "tags": [],
         "created_at": datetime.now(timezone(timedelta(hours=8))).isoformat()
     }
     
-    db.collection("questions").document(question_uuid).set(question_doc)
+    db.collection("questions").document(question_uuid).set(init_doc)
+
+    # [Step 3] 提交给 FastAPI 异步线程池跑重度 OCR 和毛玻璃
+    background_tasks.add_task(_process_question_background, question_uuid, contents, current_user.username)
     
-    return {"message": "错题录入并解析成功", "data": question_doc}
+    return {"message": "错题已提交，AI 正在后台解析中，您可以继续其他操作...", "data": init_doc}
 
 @router.get("/")
 async def list_questions(
@@ -189,15 +241,15 @@ async def list_questions(
 ):
     """获取错题列表，支持分页、考点及标签筛选"""
     query = db.collection("questions")\
-              .where("user_id", "==", current_user.username)\
-              .where("is_deleted", "==", is_deleted)
+              .where(filter=FieldFilter("user_id", "==", current_user.username))\
+              .where(filter=FieldFilter("is_deleted", "==", is_deleted))
               
     if knowledge_point:
-        query = query.where("knowledge_point", "==", knowledge_point)
+        query = query.where(filter=FieldFilter("knowledge_point", "==", knowledge_point))
     
     if tag:
         # 使用全量查询然后在内存排序和截断，避免强制要求复合索引
-        query = query.where("tags", "array_contains", tag)
+        query = query.where(filter=FieldFilter("tags", "array_contains", tag))
         docs = query.stream()
         result = [doc.to_dict() for doc in docs]
         result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
@@ -370,6 +422,94 @@ async def get_question_image(question_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"拉取图片失败: {e}")
 
+@router.get("/{question_id}/blank")
+async def get_question_blank(question_id: str):
+    """流式代理拉取 GCS 上的擦除后图片"""
+    try:
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"blank/{question_id}.jpg")
+        bytes_data = blob.download_as_bytes()
+        return Response(content=bytes_data, media_type="image/jpeg")
+    except NotFound:
+        # 降级：如果 blank 不存在，尝试返回 original
+        try:
+            bucket = storage_client.bucket(BUCKET_NAME)
+            blob = bucket.blob(f"original/{question_id}.jpg")
+            bytes_data = blob.download_as_bytes()
+            return Response(content=bytes_data, media_type="image/jpeg")
+        except:
+             raise HTTPException(status_code=404, detail="图片未找到")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"拉取擦除图片失败: {e}")
+
+@router.get("/{question_id}/thumbnail")
+async def get_question_thumbnail(question_id: str):
+    """流式代理拉取 GCS 上的压缩缩略图并直接回传给前端"""
+    try:
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"thumbnail/{question_id}.jpg")
+        bytes_data = blob.download_as_bytes()
+        return Response(content=bytes_data, media_type="image/jpeg")
+    except NotFound:
+        # 降级：如果 thumbnail 不存在，尝试返回 original
+        try:
+            bucket = storage_client.bucket(BUCKET_NAME)
+            blob = bucket.blob(f"original/{question_id}.jpg")
+            bytes_data = blob.download_as_bytes()
+            return Response(content=bytes_data, media_type="image/jpeg")
+        except:
+             raise HTTPException(status_code=404, detail="图片未找到")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"拉取缩略图失败: {e}")
+
+async def _do_regenerate_erasure(question_id: str):
+    """后台执行擦除图重新生成"""
+    try:
+        doc_ref = db.collection("questions").document(question_id)
+        
+        # 获取原图
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob_original = bucket.blob(f"original/{question_id}.jpg")
+        image_bytes = blob_original.download_as_bytes()
+        
+        # 重新调用擦除服务
+        clean_bytes = ai_service.remove_handwriting(image_bytes)
+        
+        # 保存覆盖 blank
+        blob_blank = bucket.blob(f"blank/{question_id}.jpg")
+        blob_blank.upload_from_string(clean_bytes, content_type="image/jpeg")
+        
+        # 更新 Firestore 带上缓存穿透参数
+        timestamp = int(datetime.utcnow().timestamp())
+        new_url = f"/api/v1/questions/{question_id}/blank?t={timestamp}"
+        doc_ref.update({"image_blank": new_url})
+        print(f"[Success] Background regeneration complete for {question_id}")
+    except Exception as e:
+        print(f"[Error] Background regeneration failed for {question_id}: {e}")
+
+@router.post("/{question_id}/regenerate-erasure")
+async def regenerate_erasure(
+    question_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user)
+):
+    """重新生成该题目的擦除图"""
+    doc_ref = db.collection("questions").document(question_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="错题未找到")
+    
+    data = doc.to_dict()
+    if data["user_id"] != current_user.username:
+        raise HTTPException(status_code=403, detail="无权操作该错题")
+    
+    # 将任务提交给后台执行
+    background_tasks.add_task(_do_regenerate_erasure, question_id)
+    
+    return {"message": "擦除图重新生成任务已提交，将在后台异步执行。请稍后刷新查看最新结果。"}
+
+
+
 @router.get("/{question_id}/diagram")
 async def get_question_diagram(question_id: str):
     """流式代理插图拉取去手写干净配图"""
@@ -384,9 +524,7 @@ async def get_question_diagram(question_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"拉取插图失败: {e}")
 
-# ==========================================
-# 3. 标签与科目管理接口 (Requirement 2)
-# ==========================================
+# 标签与科目管理
 
 @router.get("/tags/all")
 async def get_tags(current_user: User = Depends(get_current_user)):
@@ -436,9 +574,7 @@ async def update_question_tags(
     doc_ref.update({"tags": request.tags})
     return {"message": "标签绑定成功", "tags": request.tags}
 
-# ==========================================
-# 4. 批量管理接口 (Batch Operations)
-# ==========================================
+# 批量管理
 
 class BatchRequest(BaseModel):
     ids: List[str]
@@ -454,7 +590,7 @@ async def batch_restore_questions(
     chunks = [request.ids[i:i + 30] for i in range(0, len(request.ids), 30)]
     count = 0
     for chunk in chunks:
-        docs = db.collection("questions").where("user_id", "==", current_user.username).where("id", "in", chunk).stream()
+        docs = db.collection("questions").where(filter=FieldFilter("user_id", "==", current_user.username)).where(filter=FieldFilter("id", "in", chunk)).stream()
         for doc in docs:
             batch.update(doc.reference, {"is_deleted": False})
             count += 1
@@ -471,16 +607,14 @@ async def batch_permanent_delete_questions(
     chunks = [request.ids[i:i + 30] for i in range(0, len(request.ids), 30)]
     count = 0
     for chunk in chunks:
-        docs = db.collection("questions").where("user_id", "==", current_user.username).where("id", "in", chunk).stream()
+        docs = db.collection("questions").where(filter=FieldFilter("user_id", "==", current_user.username)).where(filter=FieldFilter("id", "in", chunk)).stream()
         for doc in docs:
             batch.delete(doc.reference)
             count += 1
     batch.commit()
     return {"message": f"成功永久删除 {count} 道错题"}
 
-# ==========================================
-# 5. TTS 语音接口 (Text-to-Speech)
-# ==========================================
+# TTS 语音接口
 
 from fastapi.responses import Response
 
@@ -512,11 +646,7 @@ async def create_tts_ticket(
     return {"ticket_id": ticket_id}
 
 
-# ==========================================
-
-
-# 4. 试卷生成与导出接口
-# ==========================================
+# 试卷生成与导出接口
 
 from pydantic import BaseModel
 
@@ -647,7 +777,6 @@ async def generate_paper(
     for index, q in enumerate(questions_data, 1):
         image_html = ""
         # 生成的题目不附带原图照片，保持干净文本版式
-        # if q.get("image_original"): ...
 
         options_html = ""
         if q.get("options"):

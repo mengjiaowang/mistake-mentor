@@ -8,18 +8,16 @@ import 'login_screen.dart';
 import 'recycle_bin_screen.dart';
 import 'package:flutter_math_fork/flutter_math.dart'; // 导入公式渲染包
 import 'package:url_launcher/url_launcher.dart';
-import 'package:audioplayers/audioplayers.dart'; // 新增：语音播报
-import 'package:flutter/foundation.dart'; // 新增 kIsWeb
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
 import '../main.dart'; // 引入 themeNotifier
 
-// ==========================================
 // 自定义混合文本渲染控件 (支持行内 $...$ 公式)
-// ==========================================
 class MathText extends StatelessWidget {
   final String text;
   final TextStyle? style;
-  final int? maxLines; // 新增
-  final TextOverflow? overflow; // 新增
+  final int? maxLines;
+  final TextOverflow? overflow;
 
   const MathText(this.text, {this.style, this.maxLines, this.overflow, Key? key}) : super(key: key);
 
@@ -64,7 +62,7 @@ class MathText extends StatelessWidget {
 }
 
 class DashboardScreen extends StatefulWidget {
-  final ValueNotifier<bool>? refreshNotifier; // 新增：刷新信号源
+  final ValueNotifier<bool>? refreshNotifier;
 
   const DashboardScreen({this.refreshNotifier, Key? key}) : super(key: key);
 
@@ -73,25 +71,25 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  final AudioPlayer _audioPlayer = AudioPlayer(); // 新增：TTS 播放器
-  bool _isPlayingTts = false; // 新增：播放状态
-  String? _currentPlayingQid; // 新增：当前播放的错题 ID
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isPlayingTts = false;
+  String? _currentPlayingQid;
 
-  final ScrollController _scrollController = ScrollController(); // 新增：滚动控制器
+  final ScrollController _scrollController = ScrollController();
   List<QuestionModel> _questions = [];
 
   bool _isLoading = true;
-  bool _isLoadingMore = false; // 新增：加载更多状态
-  bool _hasMore = true;        // 新增：是否还有更多
-  int _currentOffset = 0;      // 新增：偏移量
-  final int _limit = 24;       // 新增：每页极限页长
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
+  int _currentOffset = 0;
+  final int _limit = 24;
   
-  // 新增科目过滤状态
+  // 科目过滤状态
   List<String> _allTags = ["全部"];
   String _selectedTag = "全部";
 
 
-  // --- 新增：试卷导出与多选状态 ---
+  // 试卷导出与多选状态
   bool _isSelectionMode = false;
   final Set<String> _selectedQuestionIds = {};
   DateTimeRange? _selectedDateRange = null;
@@ -100,7 +98,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _loadData();
-    _scrollController.addListener(_scrollListener); // 新增滚动监听
+    _scrollController.addListener(_scrollListener);
     widget.refreshNotifier?.addListener(_loadData); // 添加流监听
   }
 
@@ -114,9 +112,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
-    _scrollController.dispose(); // 释放控制器
-    _audioPlayer.dispose(); // 新增：释放播放器
-    widget.refreshNotifier?.removeListener(_loadData); // 销毁监听
+    _scrollController.dispose();
+    _audioPlayer.dispose();
+    widget.refreshNotifier?.removeListener(_loadData);
     super.dispose();
   }
 
@@ -395,9 +393,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: ClipRRect(
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
                     child: CachedNetworkImage(
-                      imageUrl: item.imageBlank.startsWith('/') 
-                          ? '${ApiService.baseUrl}${item.imageBlank}' 
-                          : (item.imageBlank.isNotEmpty ? item.imageBlank : item.imageOriginal),
+                      imageUrl: item.imageThumbnail.isNotEmpty
+                          ? (item.imageThumbnail.startsWith('/') ? '${ApiService.baseUrl}${item.imageThumbnail}' : item.imageThumbnail)
+                          : (item.imageBlank.startsWith('/') 
+                              ? '${ApiService.baseUrl}${item.imageBlank}' 
+                              : (item.imageBlank.isNotEmpty ? item.imageBlank : item.imageOriginal)),
                       width: double.infinity,
                       fit: BoxFit.cover,
                       placeholder: (context, url) => Center(child: SpinKitWave(color: Theme.of(context).primaryColor, size: 20)),
@@ -486,6 +486,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (context) {
         bool showSimilarAnalysis = false;
         bool showSimilarAnswer = false;
+        bool showOriginalImage = false;
+        bool isRegenerating = false; // 新增：正在重新擦除的状态
+        String currentBlankUrl = item.imageBlank; // 新增：本地可变 blank url
+
 
         return StatefulBuilder(
           builder: (context, setModalState) {
@@ -534,12 +538,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       MathText(item.questionText, style: const TextStyle(fontSize: 16)),
                       const SizedBox(height: 12),
                       if (item.imageOriginal.isNotEmpty) ...[
-                        Text('🖼️ 题目原图：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Theme.of(context).primaryColor)),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(showOriginalImage ? '🖼️ 题目原图：' : '✨ 智能擦除图：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Theme.of(context).primaryColor)),
+                            Wrap(
+                              spacing: 8,
+                              children: [
+                                if (!showOriginalImage)
+                                  isRegenerating 
+                                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                                    : TextButton.icon(
+                                        onPressed: () async {
+                                          setModalState(() => isRegenerating = true);
+                                          final result = await apiService.regenerateErasure(item.id);
+                                          setModalState(() {
+                                            isRegenerating = false;
+                                          });
+                                          if (result != null) {
+                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('重新生成任务已提交！后台正在处理，请稍后下拉刷新查看。')));
+                                          } else {
+                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('提交失败，请重试')));
+                                          }
+                                        },
+                                        icon: const Icon(Icons.refresh, color: Colors.orange, size: 16),
+                                        label: const Text('重新生成', style: TextStyle(color: Colors.orange, fontSize: 13)),
+                                        style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 0)),
+                                      ),
+                                TextButton.icon(
+                                  onPressed: () => setModalState(() => showOriginalImage = !showOriginalImage),
+                                  icon: Icon(showOriginalImage ? Icons.auto_fix_high : Icons.history, color: Theme.of(context).primaryColor, size: 16),
+                                  label: Text(showOriginalImage ? '查看智能擦除' : '查看原图', style: TextStyle(color: Theme.of(context).primaryColor, fontSize: 13)),
+                                  style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 0)),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                         const SizedBox(height: 8),
                         ClipRRect(
                           borderRadius: BorderRadius.circular(12),
                           child: CachedNetworkImage(
-                            imageUrl: '${ApiService.baseUrl}${item.imageOriginal}',
+                            imageUrl: showOriginalImage 
+                                ? '${ApiService.baseUrl}${item.imageOriginal}'
+                                : (currentBlankUrl.startsWith('/') ? '${ApiService.baseUrl}$currentBlankUrl' : (currentBlankUrl.isNotEmpty ? currentBlankUrl : item.imageOriginal)),
                             width: double.infinity,
                             fit: BoxFit.contain, // 详情使用 contain 完整查看
                             placeholder: (context, url) => const SizedBox(height: 100, child: Center(child: CircularProgressIndicator())),
@@ -708,6 +750,52 @@ class _DashboardScreenState extends State<DashboardScreen> {
                          ],
                       ] else
                          const Text('生成中...'),
+
+                      const Divider(height: 30),
+
+                      const Text('🕒 复习历史轨迹：', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.blueGrey)),
+                      const SizedBox(height: 12),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.add_circle_outline, color: Colors.blue, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(_formatTimestamp(item.createdAt), style: const TextStyle(fontSize: 14))),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                              child: const Text('录入题目', style: TextStyle(color: Colors.blue, fontSize: 12, fontWeight: FontWeight.bold)),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (item.reviewHistory != null && item.reviewHistory!.isNotEmpty)
+                        ...item.reviewHistory!.map((entry) {
+                          final ts = entry['timestamp'] ?? '';
+                          final feedback = entry['feedback'] ?? '未知';
+                          Color feedbackColor = Colors.grey;
+                          String feedbackName = '未知';
+                          if (feedback == 'mastered') { feedbackColor = Colors.green; feedbackName = '完全掌握'; }
+                          else if (feedback == 'blurry') { feedbackColor = Colors.orange; feedbackName = '仍然模糊'; }
+                          else if (feedback == 'unmastered') { feedbackColor = Colors.red; feedbackName = '完全忘记'; }
+                          
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              children: [
+                                Icon(Icons.history, color: feedbackColor, size: 16),
+                                const SizedBox(width: 8),
+                                Expanded(child: Text(_formatTimestamp(ts), style: const TextStyle(fontSize: 14))),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(color: feedbackColor.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                                  child: Text(feedbackName, style: TextStyle(color: feedbackColor, fontSize: 12, fontWeight: FontWeight.bold)),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
 
                       const Divider(height: 30),
 

@@ -163,6 +163,19 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>?> regenerateErasure(String questionId) async {
+    try {
+      final response = await _dio.post('/api/v1/questions/$questionId/regenerate-erasure');
+      if (response.statusCode == 200) {
+        return response.data;
+      }
+      return null;
+    } catch (e) {
+      print('Regenerate erasure error: $e');
+      return null;
+    }
+  }
+
   // ==========================================
   // 3. 标签与分类管理服务 (Requirement 2)
   // ==========================================
@@ -261,6 +274,53 @@ class ApiService {
     } catch (e) {
       print('Batch Permanent Delete error: $e');
       return false;
+    }
+  }
+
+  // ==========================================
+  // 4. 复习与统计服务 (Review & Statistics)
+  // ==========================================
+
+  Future<List<QuestionModel>> fetchReviewBatch({int limit = 15}) async {
+    try {
+      final response = await _dio.get('/api/v1/reviews/batch?limit=$limit');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data['questions'];
+        return data.map((e) => QuestionModel.fromJson(e)).toList();
+      }
+      return [];
+    } catch (e) {
+      print('Fetch review batch error: $e');
+      throw Exception('Failed to load review batch');
+    }
+  }
+
+  Future<Map<String, dynamic>> submitReview(String questionId, String feedback) async {
+    try {
+      final response = await _dio.post(
+        '/api/v1/reviews/$questionId',
+        data: {'feedback': feedback},
+      );
+      if (response.statusCode == 200) {
+        return response.data;
+      }
+      throw Exception('Failed to submit review');
+    } catch (e) {
+      print('Submit review error: $e');
+      throw Exception('Failed to submit review');
+    }
+  }
+
+  Future<Map<String, dynamic>> fetchStatistics() async {
+    try {
+      final response = await _dio.get('/api/v1/reviews/statistics');
+      if (response.statusCode == 200) {
+        return response.data;
+      }
+      throw Exception('Failed to load statistics');
+    } catch (e) {
+      print('Fetch statistics error: $e');
+      throw Exception('Failed to load statistics: $e');
     }
   }
 }
