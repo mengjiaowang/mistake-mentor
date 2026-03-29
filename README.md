@@ -51,6 +51,7 @@
 
 ```bash
 gcloud auth application-default login
+firebase login --reauth
 ```
 
 ### 3.1 步骤一：创建并激活虚拟环境

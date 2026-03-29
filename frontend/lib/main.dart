@@ -133,7 +133,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) {
+      builder: (sheetContext) {
         return SafeArea(
           child: Wrap(
             children: [
@@ -141,7 +141,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                 leading: const Icon(Icons.camera_alt, color: Colors.blue),
                 title: const Text('拍照上传'),
                 onTap: () async {
-                  Navigator.pop(context); // Close the modal
+                  Navigator.pop(sheetContext); // Close the modal
                   
                   List<CameraDescription> available = [];
                   try {
@@ -169,7 +169,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                 leading: const Icon(Icons.photo_library, color: Colors.green),
                 title: const Text('从相册选择'),
                 onTap: () async {
-                  Navigator.pop(context); // Close the modal
+                  Navigator.pop(sheetContext); // Close the modal
                   
                   final ImagePicker picker = ImagePicker();
                   final XFile? image = await picker.pickImage(source: ImageSource.gallery);
