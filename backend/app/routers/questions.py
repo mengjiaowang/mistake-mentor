@@ -83,9 +83,13 @@ async def _process_question_background(question_uuid: str, contents: bytes, user
     url_diagram_clean = None
     if diagram_bbox and isinstance(diagram_bbox, list) and len(diagram_bbox) == 4:
          try:
-              from PIL import Image
+              from PIL import Image, ImageOps
               import io
               orig_img = Image.open(io.BytesIO(contents))
+              
+              # 校正 EXIF 旋转属性
+              orig_img = ImageOps.exif_transpose(orig_img)
+              
               W, H = orig_img.size
               ymin, xmin, ymax, xmax = diagram_bbox
               left = int(max(0.0, min(1.0, xmin)) * W)
@@ -144,12 +148,14 @@ async def upload_question(
 
     if mirror or rotate_degrees != 0 or crop_left > 0 or crop_top > 0 or crop_width < 1.0 or crop_height < 1.0:
         try:
-            from PIL import Image
+            from PIL import Image, ImageOps
             import io
             img = Image.open(io.BytesIO(contents))
             
+            # 校正 EXIF 旋转属性
+            img = ImageOps.exif_transpose(img)
+            
             if mirror:
-                from PIL import ImageOps
                 img = ImageOps.mirror(img)
                 
             if rotate_degrees == 90:
